@@ -8,49 +8,59 @@
 
 **Tech Stack:** Nix (flakes, the module system, `lib.evalModules`/`lib.runTests`), nixpkgs `emacsPackagesFor`/`emacsWithPackages`/`trivialBuild`, emacs 30.2. No flake-parts. Spec: `docs/superpowers/specs/2026-06-20-ennoix-architecture-design.md` (Plan 1 in §11). Primer: `docs/superpowers/specs/2026-06-07-emacs-primer.md`.
 
-> **Verification note:** every Nix snippet below was prototyped and run — generation output, the fail-loud throw, the build (via `epkgs.withPackages`), and real-startup load with `vertico-mode`/`savehist-mode` active. The load gate was confirmed to *catch* a broken config (a bare `--batch` load errors `void-function vertico-mode`; the gate runs `(package-activate-all)` first and greps for error markers).
+> **Verification note:** every Nix snippet below was prototyped and run — generation output, the fail-loud throw, the build (via `epkgs.withPackages`), real-startup load with `vertico-mode`/`savehist-mode` active, the load gate catching a broken config, and the overlay-fixpoint test/example pattern (instant `ennoix.tests.unit` + recursion-free `ennoix.examples.full`).
 
-> **Option namespace:** options live at the eval's **top level** — `plugins.<name>.…` and `build.…` (NOT under an `ennoix.` prefix). This is deliberate: it matches the spec and lets Plan 2's home-manager `submoduleWith` expose `config.programs.ennoix.build.package` without double-nesting.
+> **Tests live in `hydra-jobs`, not `checks`.** Heavy builds don't belong in `nix flake check` (slow, serial). ennoix tests are exposed as derivations in the package set via an `ennoix` overlay (composed into `overlays.default`, like `verification`) and collected by `hydra-jobs/tests.nix` — filterable and parallel via `verify-hydra-jobset` / hydra. `checks` keeps only the repo's existing `formatting` check.
 
-> **Formatter note:** `nix fmt` runs treefmt with deadnix + statix + nixfmt + mdformat. It may rewrite snippets (deadnix strips unused bindings; statix applies idioms), so a committed file can differ character-for-character from the snippet here. Verify each task with `nix build .#checks.x86_64-linux.formatting` in addition to `nix fmt`.
+> **Test runner (used throughout):** `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`. The `unit` derivation evaluates `tests/ennoix.nix` (`lib.runTests`) and `touch`es `$out` if it returns `[]`, else `throw`s. It is **instant** — the "build" assertions use `lib.isDerivation` (eval-only); the real emacs build happens only in `ennoix.tests.loads` (Task 9). A RED shows up as a `throw`/eval error from `nix build`; GREEN builds.
+
+> **Option namespace:** options live at the eval's **top level** — `plugins.<name>.…` and `build.…` (NOT under an `ennoix.` prefix). This matches the spec and lets Plan 2's home-manager `submoduleWith` expose `config.programs.ennoix.build.package` without double-nesting.
+
+> **Formatter note:** `nix fmt` runs treefmt with deadnix + statix + nixfmt + mdformat (`no-lambda-pattern-names = true`, so unused pattern args like `{ lib, pkgs ? null }` are not flagged). It may rewrite snippets, so a committed file can differ character-for-character from the snippet here. Verify each task with `nix build .#checks.x86_64-linux.formatting` plus `nix fmt`.
 
 ______________________________________________________________________
 
 ## File Structure
 
-New code lives under `modules/` (the eval core + catalog) and `library/` (the public API), wired into the existing hand-rolled `flake.nix`.
+New code lives under `modules/` (eval core + catalog) and `library/` (public API); tests/examples are exposed via an overlay and collected by a new hydra jobset.
 
 - `modules/lib/mk-plugin.nix` — shared per-plugin module builder (the schema; curated values become option `default`s).
 - `modules/generation.nix` — collects enabled plugins → `build.initText`.
 - `modules/build.nix` — `build.{emacsWithPackages,package}` (default.el injection).
-- `modules/assertions.nix` — the `assertions` option + the fail-loud package checks.
+- `modules/assertions.nix` — the `assertions` option + fail-loud package checks.
 - `modules/plugins/by-name/<plugin>/default.nix` — one per Phase-0 plugin (7 total).
 - `modules/plugins/default.nix` — `readDir`-collects every `by-name/<plugin>`.
-- `modules/default.nix` — `{ lib }:` → the `baseModules` list (core modules ++ plugins).
+- `modules/default.nix` — `{ lib }:` → the `baseModules` list (core ++ plugins).
 - `overlays/emacs-packages/default.nix` — the ennoix emacs-scope overlay slot (empty in Phase 0; the `overrideScope` backstop seam).
 - `library/ennoix.nix` — `evalEnnoix` / `makeEnnoix` (pkgs resolved inside the eval).
 - `library/default.nix` — MODIFY: expose `ennoix`.
 - `tests/ennoix.nix` — `lib.runTests` unit tests (generation, defaults, assertions, build).
-- `checks/default.nix` — MODIFY: bind `pkgs`; add `ennoix-unit` (eval tests) and `ennoix-loads` (build-level `emacs --batch` gate).
-- `flake.nix` — MODIFY: add `packages.<system>.default = library.ennoix.makeEnnoix { … }`.
+- `overlays/default.nix` — MODIFY: add an `ennoix` overlay exposing `pkgs.ennoix.{tests.{unit,loads},examples.full}`, composed into `default`.
+- `hydra-jobs/tests.nix` — NEW: jobset collecting `pkgs.ennoix.tests` (next to `packages.nix`).
+- `flake.nix` — MODIFY: add `packages.<system>.default = legacyPackages.<system>.ennoix.examples.full`.
+- `checks/default.nix` — UNCHANGED (formatting only).
 
 ______________________________________________________________________
 
-## Task 1: Bind `pkgs` in checks + the `lib.runTests` harness
+## Task 1: Test suite + the `ennoix` overlay slot (the runner)
 
-> **Critical prerequisite (verified against the real file):** `checks/default.nix` is `mapAttrs (flip (const (system: { … }))) inputs.self.legacyPackages`. `flip`+`const` **discard the package-set value** and bind only the attr *name* as `system` — so `pkgs` is **not** in scope. Every later check uses `pkgs`, so we bind it first.
+> The overlay (in `overlays.default`) wraps `tests/ennoix.nix` as `pkgs.ennoix.tests.unit`. That derivation IS the TDD runner for every later task. It passes `pkgs = final` from the start, so build-tests (Task 5+) need no extra wiring.
 
 **Files:**
 
 - Create: `tests/ennoix.nix`
+- Create: `overlays/emacs-packages/default.nix`
+- Modify: `overlays/default.nix`
 
-- Modify: `checks/default.nix`
+> The emacs-scope overrideScope stub is created here (not later) because the build test in Task 5 imports it, and the overlay's `tests.unit` always passes `pkgs = final`, so that import is live from Task 5 on.
 
-- [ ] **Step 1: Create `tests/ennoix.nix`** (a `lib.runTests` suite; returns `[]` when all pass)
+- [ ] **Step 1: Create `tests/ennoix.nix`** (accepts `pkgs` from the start; self-check only) **and the emacs-scope overlay stub.**
+
+`tests/ennoix.nix`:
 
 ```nix
 # Pure-eval unit tests. `lib.runTests` returns a list of failures ([] = pass).
-{ lib }:
+{ lib, pkgs ? null }:
 lib.runTests {
   testHarnessSelfCheck = {
     expr = 1 + 1;
@@ -59,45 +69,59 @@ lib.runTests {
 }
 ```
 
-- [ ] **Step 2: Modify `checks/default.nix` to bind `pkgs` and add `ennoix-unit`**
-
-Change the per-system body so `pkgs` is bound, then add the check. The body becomes:
+`overlays/emacs-packages/default.nix` (the `overrideScope` backstop seam; empty in Phase 0 — all 7 plugins are in nixpkgs / built-in; later phases extend it):
 
 ```nix
-mapAttrs (flip (
-  const (
-    system:
-    let
-      pkgs = inputs.self.legacyPackages.${system};
-    in
-    {
-      formatting = inputs.self.formatterModule.${system}.config.build.check inputs.self;
-
-      ennoix-unit =
-        let
-          failures = import ../tests/ennoix.nix { inherit lib; };
-        in
-        if failures == [ ]
-        then pkgs.runCommand "ennoix-unit-pass" { } "touch $out"
-        else throw "ennoix unit tests failed:\n${lib.generators.toPretty { } failures}";
-    }
-  )
-)) inputs.self.legacyPackages
+_eself: _esuper: { }
 ```
 
-(`mapAttrs`, `flip`, `const`, `lib` are already in scope in this file; `pkgs` is now bound from `legacyPackages`.)
+- [ ] **Step 2: Add the `ennoix` overlay to `overlays/default.nix`.** In the `let` block add:
 
-- [ ] **Step 3: Run the check to verify it passes**
+```nix
+ennoix = final: _prev: {
+  ennoix.tests.unit =
+    let
+      failures = import ../tests/ennoix.nix { inherit (final) lib; pkgs = final; };
+    in
+    if failures == [ ]
+    then final.runCommand "ennoix-tests-unit" { } "touch $out"
+    else throw "ennoix unit tests failed:\n${final.lib.generators.toPretty { } failures}";
+};
+```
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
-Expected: builds successfully (self-check passes; `pkgs.runCommand` resolves).
+Add `ennoix` to the `composeManyExtensions` list for `default`, and to the `inherit` export:
+
+```nix
+  default = composeManyExtensions [
+    fixes
+    top-level
+    python-packages
+    verification
+    ennoix
+  ];
+in
+{
+  inherit
+    default
+    ennoix
+    fixes
+    python-packages
+    top-level
+    ;
+}
+```
+
+- [ ] **Step 3: Run the runner to verify it passes**
+
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
+Expected: builds (self-check passes; `touch $out`).
 
 - [ ] **Step 4: Commit**
 
 ```bash
 nix fmt
-git add tests/ennoix.nix checks/default.nix
-git commit -m "test: ennoix unit-test harness via lib.runTests + flake check"
+git add tests/ennoix.nix overlays/emacs-packages/default.nix overlays/default.nix
+git commit -m "test: ennoix unit suite exposed as pkgs.ennoix.tests.unit overlay"
 ```
 
 ______________________________________________________________________
@@ -110,10 +134,10 @@ ______________________________________________________________________
 
 - Test: `tests/ennoix.nix`
 
-- [ ] **Step 1: Replace `tests/ennoix.nix` with the mk-plugin tests** (keep the `{ lib }:` header)
+- [ ] **Step 1: Replace `tests/ennoix.nix`'s body** (keep the `{ lib, pkgs ? null }:` header)
 
 ```nix
-{ lib }:
+{ lib, pkgs ? null }:
 let
   inherit (lib) evalModules;
   mkPlugin = import ../modules/lib/mk-plugin.nix { inherit lib; };
@@ -144,7 +168,7 @@ lib.runTests {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L 2>&1 | tail -20`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
 Expected: FAIL — `error: … mk-plugin.nix … No such file`.
 
 - [ ] **Step 3: Implement `modules/lib/mk-plugin.nix`**
@@ -186,11 +210,11 @@ Expected: FAIL — `error: … mk-plugin.nix … No such file`.
 }
 ```
 
-> Note the deliberate naming: the builder arg is `extraConfig`; the *option* it sets is `config`. Plugin modules (Task 7) must pass `extraConfig =`, not `config =`.
+> The builder arg is `extraConfig`; the *option* it sets is `config`. Plugin modules (Task 7) must pass `extraConfig =`, not `config =`.
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -243,7 +267,7 @@ ______________________________________________________________________
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L 2>&1 | tail -20`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
 Expected: FAIL — `generation.nix … No such file`.
 
 - [ ] **Step 3: Implement `modules/generation.nix`**
@@ -277,7 +301,7 @@ in
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -298,7 +322,7 @@ ______________________________________________________________________
 
 - Test: `tests/ennoix.nix`
 
-- [ ] **Step 1: Add to `tests/ennoix.nix`** (inject a fake `epkgs` so the test stays pure — no build)
+- [ ] **Step 1: Add to `tests/ennoix.nix`** (inject a fake `epkgs` so the test stays pure)
 
 ```nix
   # in the let-block:
@@ -329,7 +353,7 @@ ______________________________________________________________________
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L 2>&1 | tail -20`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
 Expected: FAIL — `assertions.nix … No such file`.
 
 - [ ] **Step 3: Implement `modules/assertions.nix`**
@@ -350,7 +374,7 @@ in
     });
   };
 
-  # Catalog packages are backstopped by the ennoix overlay (Task 6), so these
+  # Catalog packages are backstopped by the ennoix overlay (Task 6); these
   # hold for the shipped catalog and only fire on a bad user override / extra package.
   config.assertions = mapAttrsToList (name: p: {
     assertion = p.package == null || hasAttr p.package epkgs;
@@ -361,7 +385,7 @@ in
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -376,27 +400,15 @@ ______________________________________________________________________
 
 ## Task 5: `build.nix` — default.el injection into `emacsWithPackages`
 
-> This is the first task whose test builds, so it needs `pkgs` to reach the suite. Do the wiring (Steps 1–2) **before** the RED run (Step 4), or the build test is silently skipped (false green).
+> The build test asserts `lib.isDerivation` (eval-only) — it does **not** build emacs, so the `unit` runner stays instant. Because the overlay always passes `pkgs = final` (non-null), the `buildTests` branch is **always active** under the runner — `build.nix`, `buildCfg`, and the `overlays/emacs-packages` import (created in Task 1) are live every run. The `pkgs != null` guard only protects a hypothetical direct `import ../tests/ennoix.nix { inherit lib; }` that the runner never uses.
 
 **Files:**
 
 - Create: `modules/build.nix`
 
-- Modify: `tests/ennoix.nix` (header), `checks/default.nix` (pass `pkgs`)
+- Test: `tests/ennoix.nix`
 
-- [ ] **Step 1: Make `tests/ennoix.nix` accept `pkgs`.** Change its header to:
-
-```nix
-{ lib, pkgs ? null }:
-```
-
-- [ ] **Step 2: Pass `pkgs` into the suite.** In `checks/default.nix`, change the `ennoix-unit` import to:
-
-```nix
-failures = import ../tests/ennoix.nix { inherit lib pkgs; };
-```
-
-- [ ] **Step 3: Add the build test** (guarded so pure-eval still works when `pkgs` is null)
+- [ ] **Step 1: Add the build test** (guarded so pure-eval still works when `pkgs` is null)
 
 ```nix
   # in the let-block:
@@ -415,26 +427,29 @@ failures = import ../tests/ennoix.nix { inherit lib pkgs; };
   }).config;
 ```
 
-The `runTests` call becomes `tests // lib.optionalAttrs (pkgs != null) buildTests` where:
+The `runTests` call becomes `(lib.runTests { …pure tests… }) ++ lib.optionals (pkgs != null) (lib.runTests buildTests)` where:
 
 ```nix
-  # buildTests:
-  {
+  buildTests = {
     testBuildIsDerivation = {
       expr = lib.isDerivation buildCfg.build.package;
       expected = true;
     };
-  }
+    testBareIsDerivation = {
+      expr = lib.isDerivation buildCfg.build.emacsWithPackages;
+      expected = true;
+    };
+  };
 ```
 
-(`overlays/emacs-packages/default.nix` is created in Task 6 — note this import for execution ordering; if running tasks strictly in order, create that file first or stub it here as `(_: _: { })`.)
+(`../overlays/emacs-packages/default.nix` was created in Task 1, so this import resolves.)
 
-- [ ] **Step 4: Run to verify it fails**
+- [ ] **Step 2: Run to verify it fails**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L 2>&1 | tail -20`
-Expected: FAIL — `build.nix … No such file`. (If it unexpectedly **passes**, `pkgs` isn't reaching the suite — recheck Steps 1–2 and the Task-1 `pkgs` binding.)
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
+Expected: FAIL — `build.nix … No such file`.
 
-- [ ] **Step 5: Implement `modules/build.nix`** (build from the overlaid scope `epkgs`, so the ennoix-overlay seam is real)
+- [ ] **Step 3: Implement `modules/build.nix`** (build from the overlaid scope `epkgs`)
 
 ```nix
 { config, lib, epkgs, ... }:
@@ -468,30 +483,28 @@ in
 }
 ```
 
-> `epkgs.callPackage` is used for `runCommand`/`writeText` so the module needs no separate `pkgs` arg; both `withPackages` and `trivialBuild` live on the `emacsPackagesFor` scope. (Prototype-verified: `epkgs.withPackages` builds.)
+> Prototype-verified: `epkgs.withPackages` builds; both `withPackages` and `trivialBuild` live on the `emacsPackagesFor` scope.
 
-- [ ] **Step 6: Run to verify it passes**
+- [ ] **Step 4: Run to verify it passes**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 nix fmt
-git add modules/build.nix tests/ennoix.nix checks/default.nix
+git add modules/build.nix tests/ennoix.nix
 git commit -m "feat: build — bake generated config as default.el in emacsWithPackages"
 ```
 
 ______________________________________________________________________
 
-## Task 6: ennoix overlay slot + plugins collector + `baseModules`
+## Task 6: plugins collector + `baseModules`
 
-> `modules/default.nix` is a `{ lib }:` function **from the start** (stable signature — no mid-plan change), and `modules/plugins/default.nix` `readDir`s `by-name/` (empty now; Task 7 fills it). So Task 7 adds plugins without touching `modules/default.nix`.
+> `modules/default.nix` is a `{ lib }:` function from the start (stable signature) and `modules/plugins/default.nix` `readDir`s `by-name/` (empty now; Task 7 fills it) — so Task 7 adds plugins without touching `modules/default.nix`.
 
 **Files:**
-
-- Create: `overlays/emacs-packages/default.nix`
 
 - Create: `modules/plugins/by-name/.gitkeep`
 
@@ -509,7 +522,7 @@ ______________________________________________________________________
 ```
 
 ```nix
-  # in runTests:
+  # in runTests (pure tests):
   testBaseModulesIsList = {
     expr = builtins.isList baseModules;
     expected = true;
@@ -518,24 +531,16 @@ ______________________________________________________________________
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L 2>&1 | tail -20`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
 Expected: FAIL — `modules/default.nix … No such file`.
 
-- [ ] **Step 3a: Create `overlays/emacs-packages/default.nix`** (backstop seam; empty in Phase 0)
-
-```nix
-# ennoix's emacs-scope overlay: provides catalog packages missing upstream.
-# Phase 0 needs none (all 7 are in nixpkgs / built-in); later phases extend it.
-_eself: _esuper: { }
-```
-
-- [ ] **Step 3b: Create the empty plugins dir** so `readDir` has a target
+- [ ] **Step 3a: Create the empty plugins dir** (so `readDir` has a target)
 
 ```bash
 mkdir -p modules/plugins/by-name && touch modules/plugins/by-name/.gitkeep
 ```
 
-- [ ] **Step 3c: Create `modules/plugins/default.nix`** (collects every `by-name/<plugin>`)
+- [ ] **Step 3b: Create `modules/plugins/default.nix`**
 
 ```nix
 { lib }:
@@ -549,9 +554,7 @@ in
 map (name: import (dir + "/${name}") { inherit mkPlugin; }) names
 ```
 
-(`.gitkeep` is a regular file, not a directory, so `filterAttrs (… == "directory")` skips it → `names = []` → `[]`.)
-
-- [ ] **Step 3d: Create `modules/default.nix`** (`{ lib }:` — stable signature)
+- [ ] **Step 3c: Create `modules/default.nix`** (`{ lib }:` — stable signature)
 
 ```nix
 { lib }:
@@ -565,15 +568,15 @@ map (name: import (dir + "/${name}") { inherit mkPlugin; }) names
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS (`baseModules` is a 3-element list; no plugins yet).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 nix fmt
-git add overlays/emacs-packages/default.nix modules/plugins modules/default.nix tests/ennoix.nix
-git commit -m "feat: ennoix overlay slot + plugins collector + baseModules"
+git add modules/plugins modules/default.nix tests/ennoix.nix
+git commit -m "feat: plugins collector + baseModules"
 ```
 
 ______________________________________________________________________
@@ -585,7 +588,7 @@ ______________________________________________________________________
 - Create: `modules/plugins/by-name/{vertico,orderless,marginalia,savehist,which-key,modus-themes,magit}/default.nix`
 - Test: `tests/ennoix.nix`
 
-> Curated values are the canonical activations from each package's docs. `orderless` sets `completion-styles` (no mode). `savehist`/`which-key`/`modus-themes` are built-in in emacs 30.2 (`builtIn = true`, no derivation). Each module receives `{ mkPlugin }` (passed by `modules/plugins/default.nix`). **Use `extraConfig =`, not `config =`** (mk-plugin's arg name).
+> Each module receives `{ mkPlugin }`. **Use `extraConfig =`** (mk-plugin's arg), not `config =`. `savehist`/`which-key`/`modus-themes` are built-in in emacs 30.2 (`builtIn = true`).
 
 - [ ] **Step 1: Add the catalog test**
 
@@ -602,7 +605,7 @@ ______________________________________________________________________
 ```
 
 ```nix
-  # in runTests:
+  # in runTests (pure tests):
   testCatalogHasSeven = {
     expr = builtins.length catalog;
     expected = 7;
@@ -619,8 +622,8 @@ ______________________________________________________________________
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L 2>&1 | tail -20`
-Expected: FAIL — `testCatalogHasSeven` (catalog is empty → length 0 ≠ 7).
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
+Expected: FAIL — `testCatalogHasSeven` (catalog empty → 0 ≠ 7).
 
 - [ ] **Step 3: Create the 7 plugin modules**
 
@@ -671,7 +674,7 @@ Expected: FAIL — `testCatalogHasSeven` (catalog is empty → length 0 ≠ 7).
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS (catalog length 7; orderless/magit text present).
 
 - [ ] **Step 5: Commit**
@@ -694,7 +697,7 @@ ______________________________________________________________________
 
 - Test: `tests/ennoix.nix`
 
-- [ ] **Step 1: Add the test** (under the `pkgs != null` build-tests block)
+- [ ] **Step 1: Add the test** (in `buildTests`, exercised only when `pkgs != null`)
 
 ```nix
   # in buildTests:
@@ -711,11 +714,11 @@ ______________________________________________________________________
   };
 ```
 
-> This test exercises `library/ennoix.nix` directly. The `library/default.nix` wiring (Step 4) is validated by Task 9's flake output, which consumes `inputs.self.library.ennoix.makeEnnoix`.
+> Exercises `library/ennoix.nix` directly. The `library/default.nix` wiring (Step 4) is validated by Task 9's flake `packages.default` (`legacyPackages.<sys>.ennoix.examples.full` → `library.ennoix.makeEnnoix`).
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L 2>&1 | tail -20`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
 Expected: FAIL — `library/ennoix.nix … No such file`.
 
 - [ ] **Step 3: Implement `library/ennoix.nix`**
@@ -725,10 +728,10 @@ Expected: FAIL — `library/ennoix.nix … No such file`.
 let
   baseModules = import ../modules/default.nix { inherit lib; };
 
-  # Resolve pkgs INSIDE the eval (one source of truth). Phase 0 callers always
-  # pass `pkgs` (from legacyPackages, which already applies the repo overlays);
-  # the `system`-only fallback is a convenience that does NOT apply the repo's
-  # top-level overlay and is unexercised in Phase 0 (refined in a later plan).
+  # Resolve pkgs INSIDE the eval. Phase 0 callers always pass `pkgs` (from
+  # legacyPackages, which already applies the repo overlays); the system-only
+  # fallback does NOT apply the repo top-level overlay and is unexercised in
+  # Phase 0 (refined in a later plan).
   resolvePkgs = { pkgs, system }:
     if pkgs != null then pkgs
     else import nixpkgs {
@@ -759,17 +762,17 @@ in
 { inherit evalEnnoix makeEnnoix; }
 ```
 
-- [ ] **Step 4: Expose it from `library/default.nix`.** Inside the `makeExtensible` body (alongside `paths`/`systems`), add:
+- [ ] **Step 4: Expose it from `library/default.nix`.** Inside the `makeExtensible` body (alongside `paths`/`systems`):
 
 ```nix
 ennoix = import ./ennoix.nix { inherit lib; nixpkgs = inputs.nixpkgs; };
 ```
 
-(`inputs` is the file-level argument of `library/default.nix`; `inputs.nixpkgs` is the flake input.)
+(`inputs` is the file-level argument of `library/default.nix`.)
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-unit -L`
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -782,90 +785,135 @@ git commit -m "feat: library.ennoix — evalEnnoix/makeEnnoix with pkgs resolved
 
 ______________________________________________________________________
 
-## Task 9: flake `packages.default` (`nix run`) + the `ennoix-loads` build gate
+## Task 9: example emacs + load gate (overlay) + `packages.default` + hydra jobset
 
 **Files:**
 
+- Modify: `overlays/default.nix` (extend the `ennoix` overlay)
+
 - Modify: `flake.nix`
 
-- Modify: `checks/default.nix`
+- Create: `hydra-jobs/tests.nix`
 
-- [ ] **Step 1: Add the `packages.default` output to `flake.nix`** (inside `outputs = inputs: { … }`, using the repo's `defaultSystems` helper)
+- [ ] **Step 1: Extend the `ennoix` overlay** in `overlays/default.nix` to add the example emacs and the load gate:
+
+```nix
+ennoix = final: _prev: {
+  ennoix = {
+    examples.full = inputs.self.library.ennoix.makeEnnoix {
+      pkgs = final;
+      modules = [
+        {
+          plugins.vertico.enable = true;
+          plugins.orderless.enable = true;
+          plugins.marginalia.enable = true;
+          plugins.savehist.enable = true;
+          plugins.which-key.enable = true;
+          plugins.modus-themes.enable = true;
+          plugins.magit.enable = true;
+        }
+      ];
+    };
+
+    tests.unit =
+      let
+        failures = import ../tests/ennoix.nix { inherit (final) lib; pkgs = final; };
+      in
+      if failures == [ ]
+      then final.runCommand "ennoix-tests-unit" { } "touch $out"
+      else throw "ennoix unit tests failed:\n${final.lib.generators.toPretty { } failures}";
+
+    # HEAVY: builds the example emacs and asserts its generated config loads.
+    tests.loads = final.runCommand "ennoix-tests-loads" { } ''
+      export HOME=$(mktemp -d)
+      # --batch skips package activation AND default.el; mirror real startup.
+      # use-package CATCHES errors and prints them, so grep error markers +
+      # require a success marker (verified: bare load errors void-function).
+      ${final.ennoix.examples.full}/bin/emacs --batch \
+        --eval '(package-activate-all)' \
+        --eval '(load (locate-library "default") nil t)' \
+        --eval '(message "ennoix-config-loaded-ok")' > log 2>&1 \
+        || { echo "emacs exited non-zero:"; cat log; exit 1; }
+      if grep -qiE 'error \(|lisp error|definition is void|wrong type|void-(function|variable)' log; then
+        echo "ennoix: config produced an error at load:"; cat log; exit 1
+      fi
+      grep -q 'ennoix-config-loaded-ok' log || { echo "missing success marker:"; cat log; exit 1; }
+      touch $out
+    '';
+  };
+};
+```
+
+- [ ] **Step 2: Add `packages.default`** to `flake.nix` (inside `outputs = inputs: { … }`, reusing the example):
 
 ```nix
 packages = inputs.self.library.systems.defaultSystems (system: {
-  default = inputs.self.library.ennoix.makeEnnoix {
-    pkgs = inputs.self.legacyPackages.${system};
-    modules = [
-      {
-        plugins.vertico.enable = true;
-        plugins.orderless.enable = true;
-        plugins.marginalia.enable = true;
-        plugins.savehist.enable = true;
-        plugins.which-key.enable = true;
-        plugins.modus-themes.enable = true;
-        plugins.magit.enable = true;
-      }
-    ];
-  };
+  default = inputs.self.legacyPackages.${system}.ennoix.examples.full;
 });
 ```
 
-- [ ] **Step 2: Add the `ennoix-loads` gate** to `checks/default.nix` (inside the same per-system attrset as `ennoix-unit`; `pkgs` is bound from Task 1)
+- [ ] **Step 3: Create `hydra-jobs/tests.nix`** (jobset collecting `pkgs.ennoix.tests`, mirroring `packages.nix`'s arg shape)
 
 ```nix
-ennoix-loads =
-  let
-    emacs = inputs.self.packages.${system}.default;
-  in
-  pkgs.runCommand "ennoix-loads" { } ''
-    export HOME=$(mktemp -d)
-    # --batch skips package activation AND default.el. Mirror real startup:
-    # (package-activate-all) loads the nix packages' autoloads, then load the
-    # generated default.el. use-package CATCHES errors and prints them rather
-    # than exiting non-zero, so we grep for error markers + require a success
-    # marker (verified: a bare load without activate-all errors void-function).
-    ${emacs}/bin/emacs --batch \
-      --eval '(package-activate-all)' \
-      --eval '(load (locate-library "default") nil t)' \
-      --eval '(message "ennoix-config-loaded-ok")' > log 2>&1 \
-      || { echo "emacs exited non-zero:"; cat log; exit 1; }
-    if grep -qiE 'error \(|lisp error|definition is void|wrong type|void-(function|variable)' log; then
-      echo "ennoix: config produced an error at load:"; cat log; exit 1
-    fi
-    grep -q 'ennoix-config-loaded-ok' log || { echo "missing success marker:"; cat log; exit 1; }
-    touch $out
-  '';
+{
+  supportedSystems ? [
+    "aarch64-linux"
+    "x86_64-linux"
+  ],
+  evalSystem ? builtins.currentSystem or "x86_64-linux",
+  nixpkgs ? null,
+}@args:
+let
+  inherit (import ./common.nix args)
+    lib
+    releaseLib
+    ;
+  inherit (releaseLib) pkgs;
+  inherit (lib.attrsets) recurseIntoAttrs;
+in
+# Single-eval-system jobset: releaseLib.pkgs is built at evalSystem only, and
+# (unlike packages.nix) we don't use mapTestOn — so `supportedSystems` is inert
+# here in Phase 0 (it aligns with verify-hydra-jobset's single-system --arg).
+# Test derivations have no meta.platforms, so collect with recurseIntoAttrs
+# (not packagePlatforms); nix-eval-jobs --force-recurse walks the tree.
+recurseIntoAttrs {
+  ennoix = recurseIntoAttrs pkgs.ennoix.tests;
+}
 ```
 
-- [ ] **Step 3: Run the gate to verify it passes**
+- [ ] **Step 4: Run the unit jobset entry (instant) and the heavy load gate**
 
-Run: `nix build .#checks.x86_64-linux.ennoix-loads -L`
-Expected: builds (config loads, no error markers, success marker present).
+Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L && nix build .#legacyPackages.x86_64-linux.ennoix.tests.loads -L`
+Expected: both build (unit instant; loads builds the emacs and the config loads, no error markers).
 
-- [ ] **Step 4 (optional RED sanity check — proves the gate isn't vacuous):** temporarily change `magit`'s `extraConfig` to include `(this-function-does-not-exist)`, run `nix build .#checks.x86_64-linux.ennoix-loads -L`, confirm it FAILS on the error-marker grep, then revert.
+- [ ] **Step 5: Verify the hydra jobset evaluates + builds** (the real runner)
 
-- [ ] **Step 5: Manual `nix run` smoke test**
+Run: `nix run .#verify-hydra-jobset -- hydra-jobs/tests.nix`
+Expected: evaluates `ennoix.{unit,loads}` and builds them; exits 0. (`verify-hydra-jobset` is the repo's `overlays/verification` tool.)
+
+- [ ] **Step 6 (optional RED sanity — proves the gate isn't vacuous):** temporarily add `(this-function-does-not-exist)` to `magit`'s `extraConfig`, run `nix build .#legacyPackages.x86_64-linux.ennoix.tests.loads -L`, confirm it FAILS on the error-marker grep, then revert.
+
+- [ ] **Step 7: Manual `nix run` smoke test**
 
 Run: `nix build .#packages.x86_64-linux.default -o ennoix-emacs && HOME=$(mktemp -d) ./ennoix-emacs/bin/emacs --batch --eval '(package-activate-all)' --eval '(load (locate-library "default") nil t)' --eval '(princ (format "vertico=%s magit=%s\n" (fboundp (quote vertico-mode)) (fboundp (quote magit-status))))'`
-Expected: prints `vertico=t magit=t`, no `Error (use-package)` lines. (Interactive check on a graphical host: `nix run .#` → vertical minibuffer + modus theme; `C-x g` → magit.)
+Expected: prints `vertico=t magit=t`, no `Error (use-package)` lines. (Interactive, graphical host: `nix run .#` → vertical minibuffer + modus theme; `C-x g` → magit.)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 nix fmt
-git add flake.nix checks/default.nix
-git commit -m "feat: standalone packages.default (nix run) + ennoix-loads build gate"
+git add overlays/default.nix flake.nix hydra-jobs/tests.nix
+git commit -m "feat: ennoix example + load gate (overlay) + packages.default + hydra tests jobset"
 ```
 
 ______________________________________________________________________
 
-## Task 10: full check + flake evaluation
+## Task 10: full flake check + jobset evaluation
 
-- [ ] **Step 1: Run the formatter check and the full flake check**
+- [ ] **Step 1: Run the formatter/flake check (formatting only — fast) and the jobset**
 
-Run: `nix fmt && nix flake check -L 2>&1 | tail -30`
-Expected: `formatting`, `ennoix-unit`, and `ennoix-loads` all pass; flake evaluates. (The pre-existing aarch64 "omitted incompatible systems" warning is fine.)
+Run: `nix fmt && nix flake check -L 2>&1 | tail -20 && nix run .#verify-hydra-jobset -- hydra-jobs/tests.nix`
+Expected: `nix flake check` passes quickly (only `formatting`; no emacs build); the jobset builds `ennoix.unit` + `ennoix.loads`. (Pre-existing aarch64 "omitted incompatible systems" warning is fine.)
 
 - [ ] **Step 2: Commit any formatting changes**
 
@@ -880,22 +928,19 @@ ______________________________________________________________________
 
 **Spec coverage (Plan 1 scope, spec §11):**
 
-- eval core (standalone) → Task 8 (`evalEnnoix`, pkgs-inside via `resolvePkgs`/`specialArgs`). ✓
-- generation pipeline (§5.5) → Task 3. ✓ (Buckets beyond per-plugin + the structured-keyword serializer are simplified to `:init`/`:config` literal strings for Phase 0 — the 7 Phase-0 plugins' curated values are literal elisp, so this is sufficient; richer keywords/buckets are a later-plan extension.)
+- eval core (standalone) → Task 8. ✓
+- generation pipeline (§5.5) → Task 3 (simplified to `:init`/`:config` literal strings; the 7 Phase-0 curated values are literal elisp, so sufficient; richer buckets/serializer are later-plan work). ✓
 - default.el injection → Task 5 (spike + prototype verified). ✓
-- makeEnnoix standalone flake output → Task 9. ✓
-- ennoix overlay slot + fail-loud assertion → Task 6 (slot) + Task 4 (assertion) + Task 8 (throws on failed assertions). ✓
+- makeEnnoix standalone flake output → Task 9 (`packages.default` from `examples.full`). ✓
+- ennoix overlay slot + fail-loud assertion → Task 6 (emacs-scope slot) + Task 4 (assertion) + Task 8 (throws). ✓
 - 7 Phase-0 plugins → Task 7. ✓
-- gate: `emacs --batch` load check + manual `nix run` → Task 9. ✓
-- Deferred items (HM/NixOS adapters, runtime binaries, profiles, conflict assertions) → correctly absent. ✓
+- gate: `emacs --batch` load check + manual `nix run` → Task 9 (`ennoix.tests.loads` + smoke test). ✓
+- Deferred items (HM/NixOS adapters, runtime binaries, profiles, conflict assertions) → absent. ✓
 
-**Placeholder scan:** no TBD/TODO; every code step shows real, prototyped code. ✓
+**Tests-in-hydra-jobs (per decision):** `checks` is untouched (formatting only). ennoix tests are package-set derivations (`pkgs.ennoix.tests.{unit,loads}`) via the `ennoix` overlay, collected by `hydra-jobs/tests.nix`, run with `verify-hydra-jobset`. The fast `unit` derivation doubles as the TDD runner.
 
-**Type/name consistency:** options at top level — `plugins.<name>.{enable,package,init,config}`, `build.{initText,emacsWithPackages,package}` — and `evalEnnoix`/`makeEnnoix`/`mkPlugin`, `epkgs`/`pkgs` via `specialArgs`, used consistently across Tasks 2–9. `mkPlugin`'s builder arg is `extraConfig` (sets the option `config`); all plugin modules pass `extraConfig =` (Task 7). `package` is a name string (matches the assertion's `hasAttr p.package epkgs` and the build's `epkgs.${p.package}`). `modules/default.nix` is `{ lib }:` from Task 6 — no mid-plan signature change. ✓
+**Placeholder scan:** none; every code step shows real, prototyped code. ✓
 
-**Spec reconciliation (deliberate, recorded):**
+**Type/name consistency:** top-level `plugins.<name>.{enable,package,init,config}` and `build.{initText,emacsWithPackages,package}`; `evalEnnoix`/`makeEnnoix`/`mkPlugin`; `epkgs`/`pkgs` via `specialArgs`; `package` is a name string (matches `hasAttr p.package epkgs` and `epkgs.${p.package}`); `mkPlugin`'s builder arg is `extraConfig` (sets option `config`), plugin modules pass `extraConfig =`; `modules/default.nix` is `{ lib }:` from Task 6 (no mid-plan signature change); the `ennoix` overlay grows (Task 1 → Task 9) but keeps `tests.unit` identical. ✓
 
-- Options live at top level (`plugins.*`/`build.*`), matching the spec's `config.build.package` and enabling Plan 2's `submoduleWith` to expose `config.programs.ennoix.build.package` without double-nesting.
-- `makeEnnoixWithModule` (spec §4.3 frozen API) is **deferred** to a later plan; Phase 0 ships `evalEnnoix` + `makeEnnoix`.
-- `build.emacsWithPackages` is implemented now (spec §4.2, trivial) though its only consumer is the Plan-2 HM adapter — kept as forward-work since it is the bare half of `build.package`.
-- `resolvePkgs`'s `system`-only fallback is unexercised in Phase 0 (callers pass `pkgs`) and does not apply the repo's top-level overlay — noted in `library/ennoix.nix`; reconciled when a `system`-only caller appears.
+**Deliberate reconciliations (recorded):** options at top level (exact names delegated to Plan 1 by spec §11; enables Plan-2 `submoduleWith` without double-nesting); the **configurable emacs binary** (spec's `cfg.package`, §6) is deferred — Phase 0 hardcodes `pkgs.emacs` (30.2, as §9 fixes); **magit's keybinding** is emitted via freeform `extraConfig`, not the structured `bind` keyword (§5.1), because the structured serializer is deferred (all 7 curated values are literal elisp, so `:init`/`:config` suffice); `makeEnnoixWithModule` (spec §4.3) deferred; `build.emacsWithPackages` is forward-work for the Plan-2 HM adapter (the bare half of `build.package`, eval-asserted in Task 5); `resolvePkgs`'s system-only branch is unexercised in Phase 0 (callers pass `pkgs`) and noted in source.
