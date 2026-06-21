@@ -18,7 +18,7 @@
 
 > **Formatter note:** `nix fmt` runs treefmt with deadnix + statix + nixfmt + mdformat (`no-lambda-pattern-names = true`). It may rewrite snippets, so committed files can differ from the snippet here. Verify each task with `nix build .#checks.x86_64-linux.formatting` plus `nix fmt`. Per repo policy, commit messages carry **no** `Co-Authored-By` trailer.
 
-> **Verification note:** every Nix snippet was prototyped and run — generation output, fail-loud throw (incl. `tryEval` catching it), the build via `epkgs.withPackages`, real-startup load with modes active, the load gate catching a broken config, the overlay-fixpoint pattern (instant `tests.unit` + recursion-free `examples.full`), and the **empty-catalog** skeleton (an emacs with an empty `default.el` builds and loads).
+> **Verification note:** every Nix snippet was prototyped and run — generation output, fail-loud throw (incl. `tryEval` catching it), the build via `epkgs.withPackages`, real-startup load with modes active, the load gate catching a broken config, the overlay-fixpoint pattern (instant `tests.unit` + recursion-free `examples.full`), and the **empty-catalog** skeleton. For the empty case two things were specifically verified (and were *wrong* before review): a **truly empty `default.el` FAILS** native-compilation on emacs 30.2 (`native-compiler-error-empty-byte`), so `build.nix` wraps it with a header + `(provide 'default)` (which builds + loads); and a bare `config.plugins` throws `attribute 'plugins' missing` with zero plugin modules, so the readers use `config.plugins or { }`.
 
 ______________________________________________________________________
 
@@ -143,7 +143,9 @@ _eself: _esuper: { }
 { config, lib, ... }:
 let
   inherit (lib) types mkOption filterAttrs mapAttrsToList concatStringsSep optional;
-  enabled = filterAttrs (_: p: p.enable) config.plugins;
+  # `or { }`: the empty catalog leaves `plugins` undeclared; a bare
+  # `config.plugins` throws `attribute 'plugins' missing` (see build.nix).
+  enabled = filterAttrs (_: p: p.enable) (config.plugins or { });
   form = name: p:
     concatStringsSep "\n" (
       [ "(use-package ${name}" ]
@@ -168,16 +170,31 @@ in
 { config, lib, epkgs, ... }:
 let
   inherit (lib) types mkOption filterAttrs mapAttrsToList;
-  enabledWithPkg = filterAttrs (_: p: p.enable && p.package != null) config.plugins;
+  # `config.plugins or { }`: with an empty catalog (zero plugin modules) the
+  # `plugins` option is undeclared, so a bare `config.plugins` throws
+  # `attribute 'plugins' missing`. The `or { }` makes the empty case safe.
+  enabledWithPkg = filterAttrs (_: p: p.enable && p.package != null) (config.plugins or { });
   pluginPkgs = mapAttrsToList (_: p: epkgs.${p.package}) enabledWithPkg;
+  # Always wrap with a header + `(provide 'default)`. A truly EMPTY (or
+  # comment-only) default.el fails native-compilation on emacs 30.2
+  # (`native-compiler-error-empty-byte`); a single real form fixes it.
+  # The initText option itself stays "" when nothing is enabled.
   defaultEl = epkgs.trivialBuild {
     pname = "default";
     version = "0";
     src = epkgs.callPackage (
       { runCommand, writeText }:
+      let
+        text = writeText "default.el" ''
+          ;;; default.el --- ennoix generated config  -*- lexical-binding: t; -*-
+          ${config.build.initText}
+          (provide 'default)
+          ;;; default.el ends here
+        '';
+      in
       runCommand "ennoix-default-src" { } ''
         mkdir -p "$out"
-        cp ${writeText "default.el" config.build.initText} "$out/default.el"
+        cp ${text} "$out/default.el"
       ''
     ) { };
     packageRequires = pluginPkgs;
@@ -211,7 +228,7 @@ in
   config.assertions = mapAttrsToList (name: p: {
     assertion = p.package == null || hasAttr p.package epkgs;
     message = "ennoix: plugin '${name}' references package '${toString p.package}' not in the emacs package set.";
-  }) (filterAttrs (_: p: p.enable) config.plugins);
+  }) (filterAttrs (_: p: p.enable) (config.plugins or { })); # or {}: empty catalog (see build.nix)
 }
 ```
 
@@ -292,7 +309,7 @@ ennoix = import ./ennoix.nix { inherit lib; nixpkgs = inputs.nixpkgs; };
 Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`
 Expected: PASS — `evalEnnoix { modules = [ ]; }` gives `initText == ""` and a real `build.package`.
 
-- [ ] **Step 13: Add delivery + the example/loads to the overlay.** Extend the `ennoix` overlay in `overlays/default.nix`:
+- [ ] **Step 13: Add delivery + the example/loads to the overlay.** **Replace** the Step-2 `ennoix` binding in `overlays/default.nix`'s `let` block with the full version below — it supersedes the `tests.unit`-only binding (do not add a second `ennoix = …`, which would be a duplicate-binding error):
 
 ```nix
 ennoix = final: _prev: {
@@ -387,7 +404,7 @@ ______________________________________________________________________
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
-Expected: FAIL — `evalEnnoix` errors that option `plugins.vertico` does not exist (no vertico module yet).
+Expected: FAIL — `evalEnnoix` errors that **the option `plugins` does not exist** (in Task 2 no module declares any `plugins.*` yet, so the whole `plugins` namespace is undeclared; from Task 3 on, with a plugin module present, the error is the more specific `plugins.<name>` does not exist).
 
 - [ ] **Step 3: Create `modules/plugins/by-name/vertico/default.nix`**
 
@@ -554,7 +571,7 @@ ______________________________________________________________________
     expected = false;
   };
   testCatalogHasSeven = {
-    expr = builtins.length (import ../modules/plugins { inherit lib; });
+    expr = builtins.length (import ./plugins { inherit lib; }); # ./plugins — eval-tests.nix lives in modules/
     expected = 7;
   };
 ```
@@ -610,8 +627,8 @@ ______________________________________________________________________
 
 - [ ] **Step 1: Fast flake check (formatting only) + the jobset**
 
-Run: `nix fmt && nix flake check -L 2>&1 | tail -20 && nix run .#verify-hydra-jobset -- hydra-jobs/tests.nix`
-Expected: `nix flake check` passes quickly (only `formatting`; no emacs build); the jobset evaluates and builds `ennoix.{unit,loads}`. (Pre-existing aarch64 "omitted incompatible systems" warning is fine.)
+Run: `nix fmt && nix build .#checks.x86_64-linux.formatting -L && nix flake check --no-build -L && nix run .#verify-hydra-jobset -- hydra-jobs/tests.nix`
+Expected: `formatting` passes; `nix flake check --no-build` evaluates every output (no builds — fast) and surfaces any eval error; the jobset builds `ennoix.{unit,loads}`. **Note:** plain `nix flake check` (without `--no-build`) would additionally **build** `packages.<system>.default` (the example emacs) and every check derivation — slow and serial, which is exactly why the tests live in the jobset, not `checks`. (Pre-existing aarch64 "omitted incompatible systems" warning is fine.)
 
 - [ ] **Step 2: Manual `nix run` smoke test**
 
