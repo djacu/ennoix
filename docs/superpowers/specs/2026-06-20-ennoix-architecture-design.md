@@ -102,9 +102,13 @@ evalEnnoix = { pkgs ? null, system ? null, modules ? [ ] }:
   };
 ```
 
-It produces `config.build.package` (the wrapped emacs, §6),
-`config.build.homeModule`, and `config.build.nixosModule` (in-core
-deferred adapters).
+It produces several `build.*` outputs (§6): `build.emacsWithPackages` (emacs
+
+- the plugin packages on the load-path, **no config baked**),
+  `build.initText` / `build.earlyInitText` (the generated config text),
+  `build.package` (`build.emacsWithPackages` + the config baked as
+  `default.el`, for targets that can't write per-user files), and the
+  in-core deferred adapters `build.homeModule` / `build.nixosModule`.
 
 **Invariants** (the verified source of nixvim's multi-target
 correctness):
@@ -303,8 +307,11 @@ plan, §11):
 1. **Serialize** keyword values: `config`/`init`/`extraConfig` are literal
    elisp strings; structured keywords (`hook`/`bind`/`mode`/`custom`) are
    Nix data serialized to elisp by an emitter adapted from rycee.
-1. **Bake** the assembled text as a `default.el` `trivialBuild` package in
-   `build.package` (§6).
+1. **Expose** the assembled text as `build.initText` (and a small
+   `build.earlyInitText` from an `early-init` bucket / per-plugin
+   `earlyInit` contributions). Standalone/NixOS **bake** `build.initText`
+   as a `default.el` `trivialBuild` into `build.package`; home-manager
+   **writes** both texts to `~/.config/emacs/{init,early-init}.el` (§6).
 
 ## 6. Config injection and delivery (verified by spike)
 
@@ -314,25 +321,34 @@ loaded, its curated `(vertico-mode 1)` ran (mode active), and the only
 thing written to `$HOME` was a native-comp `eln-cache` — **no config
 files**.
 
-- `build.package` = `emacsWithPackages` over
-  `emacsPackagesFor cfg.package |> overrideScope (ennoix-then-user)`, with
-  the generated config baked as a `default.el` `trivialBuild` package, then
-  `makeWrapper`-wrapped to add `runtimePackages` to `PATH` (§5.3). Pure and
-  `$HOME`-independent.
-- **Standalone:** `nix run` the package.
-- **Home-manager:** ennoix ships its **own** `programs.ennoix` module
-  (`programs.emacs` doesn't map cleanly — its only config sink is
-  `extraConfig` → a `default.el` that loads after user init and can't host
-  early-init). **v1 default (Strategy A):** `home.packages = [ build.package ]`
-  and `services.emacs.package = build.package` so the daemon integrates.
-  (The alternative — owning `~/.config/emacs/{early-init,init}.el` for
-  early-init control — is **deferred**, not an in-scope branch, since
-  early-init is out of scope for v1; §8.)
-- **NixOS:** stock `services.emacs.package` is settable
-  (`mkPackageOption`, verified), so `services.emacs.package = build.package`
-  gives a configured system daemon with **no ennoix NixOS module
-  required**. The in-core `build.nixosModule` slot is designed (keeps the
-  core uniform) but **not shipped/tested in v1**.
+`build.emacsWithPackages` = `emacsWithPackages` over
+`emacsPackagesFor cfg.package |> overrideScope (ennoix-then-user)`,
+`makeWrapper`-wrapped to add `runtimePackages` to `PATH` (§5.3). The two
+delivery shapes differ in *where the config goes*:
+
+- **Standalone:** `nix run` **`build.package`** — `build.emacsWithPackages`
+  with the config baked as a `default.el` `trivialBuild`. Pure and
+  `$HOME`-independent. (The spike verified this loads and runs.) `default.el`
+  loads *after* init, so standalone has **no early-init**.
+- **Home-manager (Strategy B — write the files):** ennoix ships its own
+  `programs.ennoix` module (`programs.emacs` doesn't map cleanly — its only
+  config sink is `extraConfig` → a single `default.el`). The module
+  installs **`build.emacsWithPackages`** (the *bare* package, so the config
+  is not also baked) into `home.packages`, writes `build.earlyInitText` and
+  `build.initText` to `~/.config/emacs/early-init.el` and `init.el` via
+  `xdg.configFile`, and sets `services.emacs.package = build.emacsWithPackages`
+  (the user daemon reads those files). This is rycee's approach and the
+  reason for it: owning `init.el`/`early-init.el` is the **only** way to get
+  early-init (frame-flicker/pre-load), and HM is where that matters. ennoix
+  owns those two files; the user configures via Nix, not by hand-editing
+  them (§7).
+- **NixOS:** system-wide, no per-user `~/.config`, so it uses the **baked
+  `build.package`** like standalone. Stock `services.emacs.package` is
+  settable (`mkPackageOption`, verified), so
+  `services.emacs.package = build.package` gives a configured system daemon
+  with **no ennoix NixOS module required**; the in-core `build.nixosModule`
+  slot is designed but **not shipped/tested in v1**. (NixOS therefore also
+  has no early-init in v1.)
 
 ## 7. Override and load-order semantics
 
@@ -346,9 +362,11 @@ Two override channels, kept distinct:
 - **A separate hand-written `init.el` (not supported):** load order is
   `site-start.el` → user `init.el` → `default.el` (verified:
   `startup.el:1520` site-start before the regular init; `:1044`/`:1112-1116`
-  default.el after init). Since ennoix injects via `default.el` (loads
-  last), it would override a user's own init.el — so we do not support a
-  competing user `init.el`; raw elisp goes in ennoix's freeform option.
+  default.el after init). On **standalone/NixOS** ennoix injects via
+  `default.el` (loads last), which would override a user's own init.el; on
+  **home-manager** ennoix *owns* `~/.config/emacs/init.el` directly (no
+  `default.el` indirection). Either way we do not support a competing
+  hand-written `init.el` — raw elisp goes in ennoix's freeform option.
 
 ## 8. Decisions
 
@@ -356,11 +374,11 @@ Two override channels, kept distinct:
 |---|---|
 | Catalog substrate | **Module system** (`evalModules`); scope is for the package set only. |
 | Delivery | **Hand-wired** flake outputs; no flake-parts; public API under the `library` output. |
-| Home-manager | **Own `programs.ennoix`** module; **Strategy A** (place `build.package` + set `services.emacs.package`) for v1; own-the-init-files deferred. |
+| Home-manager | **Own `programs.ennoix`** module; **Strategy B** — install `build.emacsWithPackages` + write `build.earlyInitText`/`build.initText` to `~/.config/emacs/{early-init,init}.el` via `xdg.configFile` + set `services.emacs.package`. Gets early-init. |
 | NixOS | **Stock `services.emacs.package`**; in-core slot designed, shipping deferred. |
 | Missing package | **Fail loudly** via `config.assertions` (read by `build.package`); ennoix overlay backstops catalog packages; only user refs can fail. |
 | Curated defaults | Option **`default`** attribute (`mkOptionDefault`-priority; replaces, even lists); `mkOptionDefault` if set from `config`; **profiles set keywords at `mkDefault`**. |
-| Config injection | **`default.el` baked via `trivialBuild`** in `emacsWithPackages` (spike-verified pure + loads). |
+| Config injection | **Standalone/NixOS:** config baked as `default.el` `trivialBuild` in `build.package` (spike-verified). **Home-manager:** config text written to `~/.config/emacs/{early-init,init}.el` (Strategy B). |
 | Runtime binaries | Per-plugin **`runtimePackages`**, baked onto `PATH` via `makeWrapper --prefix` on `build.package`. |
 | Autoloads / package.el | **Keep `package.el` enabled** (`package-enable-at-startup t`); autoloads load via `package-activate-all` + `package-directory-list`; no `package-quickstart`; no `:ensure`. |
 | Generation | Adapt rycee's `.assembly` emitter; ordered buckets (`prelude`/per-plugin/`postlude`/freeform-last); structured keywords serialized to elisp. |
@@ -371,11 +389,11 @@ Two override channels, kept distinct:
 
 ### Deferred / out of scope for v1
 
-- early-init optimization (GC, frame-flicker). **Precise limitation:**
-  `default.el`-only injection loads *after* package activation and user
-  init, so no curated default can affect *pre-load* behavior (frame
-  parameters, `package-enable-at-startup`); the HM-owns-early-init path is
-  the only way to host those and is deferred. (Correctness is unaffected:
+- early-init **on standalone/NixOS only** (those bake `default.el`, which
+  loads *after* package activation and init, so no curated default can
+  affect *pre-load* behavior — frame parameters, GC tuning). **Home-manager
+  gets early-init** (Strategy B writes `early-init.el`); standalone/NixOS
+  early-init is deferred. (Correctness is unaffected everywhere:
   `package.el` activation with an empty user dir is harmless — verified.)
 - Shipping/testing the NixOS module (slot designed).
 - Profiles — 1–2 curated Doom-flavored bundles (priority discipline fixed
@@ -450,9 +468,10 @@ shippable milestone:
   conflict assertions, profiles. Gate: the `emacs --batch` load check + a
   manual `nix run` smoke test.
 - **Plan 2 — delivery + extension:** `programs.ennoix` HM module
-  (Strategy A) + in-core `build.homeModule`/`build.nixosModule` plumbing,
-  the `runtimePackages` channel, the user `package-overlay` extension
-  point.
+  (Strategy B — write `~/.config/emacs/{early-init,init}.el`, install
+  `build.emacsWithPackages`) + in-core `build.homeModule`/`build.nixosModule`
+  plumbing, the `runtimePackages` channel, the user `package-overlay`
+  extension point.
 - **Plan 3+ — catalog phases 1–4** as additive milestones (Phase 1
   introduces `runtimePackages` via `ripgrep`).
 
