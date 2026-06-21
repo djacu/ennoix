@@ -184,10 +184,16 @@ sources.
 Pre-27 emacs would *automatically insert* `(package-initialize)` into
 your init.el when it started — that's why so many old configs have it.
 Don't add it yourself. (Unless you target emacs \<27.) The variable that
-gates the new behavior is `package-enable-at-startup`, which you'd set
-in `early-init.el` to disable activation if you wanted to manage
-packages some other way (relevant for ennoix, since with nix we don't
-use `package.el` at all).
+gates the new behavior is `package-enable-at-startup`.
+
+**Important for ennoix (verified by spike):** do **not** disable
+`package.el`. nix-built packages are placed on `package-directory-list`
+(the wrapper's `elpa` dir), and it is `package-activate-all` — which runs
+at startup precisely *because* `package-enable-at-startup` is `t` — that
+loads each package's `*-autoloads.el`. With `package-enable-at-startup nil`, those autoloads never load and deferred packages (and even
+`fboundp` checks) silently break. So nix replaces the *install/fetch*
+role of `package.el`, but its *activation* role is load-bearing and must
+stay on.
 
 ### Alternative: `straight.el`
 
@@ -204,12 +210,12 @@ Another third-party manager, newer, designed for parallel/async installs.
 
 **For ennoix:** nix replaces the **fetch/install** role of these tools —
 the `.el` files come from `nixpkgs` (or `emacs-overlay`) as nix-built
-derivations placed on the load-path. But "bypassed entirely" would be too
-strong: the nixpkgs emacs wrapper still leaves `package.el` *loaded and
-active* at runtime unless you disable it (set `package-enable-at-startup`
-to `nil` in `early-init.el`). That distinction has teeth — a stray
-`:ensure t` can still trigger a network install even though nix already
-supplied the package. We unpack exactly what `use-package` keeps doing
+derivations on the load-path. But "bypassed entirely" is wrong on two
+counts: (1) `package.el` stays *loaded and active*, and its activation is
+**required** — it's what loads the nix packages' autoloads (above); (2) a
+stray `:ensure t` can still trigger a network install even though nix
+already supplied the package. So the correct stance is *keep package.el
+enabled, but never `:ensure`*. We unpack what `use-package` keeps doing
 under nix in §4 ("use-package's role under nix").
 
 ______________________________________________________________________
@@ -298,28 +304,16 @@ regardless of where the `.el` files came from:
 - `require`/autoload wiring, `:init`/`:config` evaluation,
 - `:defer` lazy-loading, and the `:hook`/`:bind`/`:mode` triggers.
 
-The trap is `:ensure`. Verified in source:
-
-- `:ensure t` expands to `use-package-ensure-elpa`, which does
-  `(unless (package-installed-p pkg) (package-refresh-contents) (package-install pkg))` (`emacs/lisp/use-package/use-package-ensure.el`,
-  ~`:127-139`).
-- `package-installed-p` checks only package.el's own registry
-  (`package--alist`), the quickstart `package-activated-list`, and
-  built-ins — **not** arbitrary `load-path`/site-lisp entries
-  (`emacs/lisp/emacs-lisp/package-activate.el`).
-- The nixpkgs wrapper puts packages on the load-path but does **not**
-  register them with package.el. So `package-installed-p` returns `nil`
-  for a nix-supplied package, and `:ensure t` triggers
-  `package-refresh-contents` — **a network fetch that defeats
-  reproducibility** (or an error if package.el is disabled).
-
-So the correct design stance for a *generating* tool: emit **no**
-`:ensure` (or `use-package-always-ensure nil`), because the tool already
-knows the exact package list — the declared set *is* the closure set by
-construction, so they cannot drift. Optionally also set
-`package-enable-at-startup nil` to take package.el out of the picture
-entirely. (This is also why emacs-overlay's parse-then-`alwaysEnsure`
-approach is the *inverse* of what we want; §6.3.)
+The trap is `:ensure`. The correct design stance for a *generating* tool
+is to emit **no** `:ensure` (set `use-package-always-ensure nil`): the
+tool already knows the exact package list, so the declared set *is* the
+closure set and cannot drift. `:ensure t` expands to `package-install` /
+`package-refresh-contents` for any package `package-installed-p` deems
+missing (`use-package-ensure.el:127-139`) — a network fetch that defeats
+reproducibility. Whether a given nix package counts as "installed"
+depends on whether `package-activate-all` registered it, so the only safe
+rule is **never `:ensure`**. (This is why emacs-overlay's
+parse-then-`alwaysEnsure` approach is the inverse of what we want; §6.3.)
 
 ### Autoloads — the deferral mechanism (and how nix changes it)
 
@@ -330,13 +324,18 @@ autoload-registering keyword *and* your package manager doesn't provide
 autoloads, "it is possible that your package will never be loaded if you
 do not add `:demand t`" (`doc/misc/use-package.texi`).
 
-Under nix this is a first-order design constraint, not a detail:
-nix-supplied packages only have working autoloads if the generated
-config arranges for them (e.g. via package activation /
-`package-quickstart` — which is exactly what rycee does; §8). **A design
-that emits deferred forms without guaranteeing autoloads will silently
-produce packages that never load** — a quiet failure, the worst kind.
-The `:demand t` fallback forces an eager load when no autoloads exist.
+Under nix this works **automatically** (verified by spike): the wrapper
+places each package's `elpa` dir on `package-directory-list`, and
+`package-activate-all` — which runs at startup *because*
+`package-enable-at-startup` is `t` — loads every package's
+`*-autoloads.el` (spike: `package-activated-list` held the enabled
+package and its mode was autoloaded). No `package-quickstart` call and no
+special config arrangement is needed. The **one rule**: don't disable
+`package.el` — that skips activation and the autoloads never load, at
+which point deferred forms silently never load (the manual's
+`:demand t`-or-nothing warning, `doc/misc/use-package.texi`). So
+"autoloads via package activation" is a property of the wrapper we rely
+on, not something ennoix must build.
 
 ______________________________________________________________________
 
