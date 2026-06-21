@@ -114,13 +114,27 @@ correctness):
    so assertions/warnings propagate uniformly and delivery wiring is
    additive.
 
-**Dependency floors / reuse:** the host-adapter plumbing (forwarding host
-`pkgs` at exact priorities, borrowing the submodule type) depends on
-nixpkgs lib **≥ 25.11** (`valueMeta`-based submodule check+merge); record
-this as a hard minimum. **Lift nixvim's `nixpkgsModule` priority pattern
-verbatim** rather than re-deriving it — the priorities are load-bearing
-and easy to get subtly wrong. This is the design's trickiest, not-yet-built
-piece (§10).
+**Host-adapter mechanism — use `submoduleWith`, not `valueMeta`.** The
+HM/NixOS adapters declare `programs.ennoix` (or the NixOS equivalent) as
+an option whose **type is `lib.types.submoduleWith { modules = baseModules; … }`**. The host's own module system then evaluates ennoix's
+modules merged with the user's settings, so `config.programs.ennoix` *is*
+the evaluated ennoix config and `config.programs.ennoix.build.package` is
+read directly — no extraction step. The host `pkgs` is threaded in via a
+small module (`{ nixpkgs.pkgs = pkgs; }`) satisfying invariant 1.
+
+This is deliberately **not** nixvim's approach. nixvim borrows the
+submodule type from a separate base eval and reaches into
+`options.programs.nixvim.valueMeta.configuration` to extract the merged
+sub-config — which requires nixpkgs lib **≥ 25.11** (the `valueMeta`
+feature). `submoduleWith` needs no such extraction (the evaluated config
+is a plain attribute, supported in lib for years), so ennoix takes **no
+hard lib floor**. The cost is minor: the adapter restates `modules = baseModules` (a small duplication with the standalone path) and threads
+`pkgs` explicitly. `submoduleWith` is a standard, widely-used nixpkgs
+pattern; its exact wiring for ennoix (pkgs threading, `build.package`
+exposure, assertion propagation) is the trickiest **not-yet-built** piece
+(§10) but carries no version dependency. (`valueMeta`/`extendModules`
+remains a fallback if single-source-of-truth type sharing later proves
+worth the floor.)
 
 ### 4.3 Delivery — hand-wired flake outputs (no flake-parts)
 
@@ -349,7 +363,7 @@ Two override channels, kept distinct:
 | Generation | Adapt rycee's `.assembly` emitter; ordered buckets (`prelude`/per-plugin/`postlude`/freeform-last); structured keywords serialized to elisp. |
 | `custom-file` | v1: set `custom-file` to a writable `$HOME` path **or** declare interactive `customize` unsupported; generator emits `:custom`/`setopt` (not `setq`). |
 | Conflicts | Best-effort `config.assertions` for known mutually-exclusive sets (first: vertico/ivy/helm); otherwise the user's responsibility. |
-| nixpkgs floor | **≥ 25.11** (for `valueMeta` host-adapter plumbing). |
+| Host-adapter mechanism | **`submoduleWith`** (host module system evaluates the ennoix submodule; `config.programs.ennoix.build.package` read directly) — **no hard nixpkgs lib floor**. `valueMeta`/`extendModules` is the fallback (would require lib ≥ 25.11). |
 | Build gate | Adopt rycee's `emacs --batch` load check as a flake `check` (the "feature works, not just typechecks" gate). |
 
 ### Deferred / out of scope for v1
@@ -407,9 +421,10 @@ Verified (source or spike): substrate choice; host-agnostic single core;
 priority discipline.
 
 Not yet built (engineering, not porting): the in-core host-adapter
-plumbing (`pkgs`/`lib` threading at exact priorities, assertion
-propagation, the `valueMeta`/`extendModules` borrow) — nixvim's trickiest
-part, requiring nixpkgs lib ≥ 25.11; the generation engine; the catalog.
+plumbing (`submoduleWith`-based: host `pkgs` threading and assertion
+propagation) — the trickiest part, though it carries no version
+dependency (choosing the `valueMeta`/`extendModules` fallback instead
+would require nixpkgs lib ≥ 25.11); the generation engine; the catalog.
 
 Risks:
 
