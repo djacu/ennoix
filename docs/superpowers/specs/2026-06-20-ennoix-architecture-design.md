@@ -76,12 +76,15 @@ activation and recommended configuration**, expressed through
 | **Catalog** (typed per-plugin config, curated overridable defaults, conflict assertions) | NixOS module system (`lib.evalModules`) | Only it provides option types, `mkDefault`/priority resolution, `mkIf`, and auto-merging `assertions`. |
 | **Package set** (the elisp derivations) | reused `emacsPackagesFor` scope + an ennoix overlay (`overrideScope`) | The package set already *is* a scope; extending it with `overrideScope` is the canonical idiom. |
 
-The package-scope mechanism (the `pythonPackagesExtensions` instinct) is
-correct **for the package set only**. It cannot carry the catalog:
+The package set is extended the canonical way — `overrideScope` on the
+`emacsPackagesFor` scope (the same fixed-point-scope pattern as
+`pythonPackagesExtensions`, but applied *per-scope* since emacs has no
+global extensions list; §5.3). That is the right tool for
+*adding/overriding derivations* but **not** for the typed catalog:
 verified empirically, `lib.mkDefault "x"` is inert data
 (`{ _type="override"; priority=1000; content="x"; }`) that only
 `evalModules` interprets — a `//`-merged scope cannot express overridable
-curated defaults.
+curated defaults. Hence the split.
 
 ### 4.2 The eval core
 
