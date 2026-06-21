@@ -102,13 +102,14 @@ evalEnnoix = { pkgs ? null, system ? null, modules ? [ ] }:
   };
 ```
 
-It produces several `build.*` outputs (§6): `build.emacsWithPackages` (emacs
+It produces several `build.*` outputs (§6):
 
-- the plugin packages on the load-path, **no config baked**),
-  `build.initText` / `build.earlyInitText` (the generated config text),
-  `build.package` (`build.emacsWithPackages` + the config baked as
-  `default.el`, for targets that can't write per-user files), and the
-  in-core deferred adapters `build.homeModule` / `build.nixosModule`.
+- `build.emacsWithPackages` — emacs with the plugin packages on the
+  load-path, **no config baked**.
+- `build.initText` / `build.earlyInitText` — the generated config text.
+- `build.package` — `build.emacsWithPackages` with the config baked as a
+  `default.el`, for targets that can't write per-user files.
+- `build.homeModule` / `build.nixosModule` — the in-core deferred adapters.
 
 **Invariants** (the verified source of nixvim's multi-target
 correctness):
