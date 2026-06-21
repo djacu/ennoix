@@ -14,7 +14,7 @@
 
 > **Test runner (used throughout):** `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L`. The `unit` derivation evaluates `tests/ennoix.nix` (`lib.runTests`) and `touch`es `$out` if it returns `[]`, else `throw`s. It is **instant** — the "build" assertions use `lib.isDerivation` (eval-only); the real emacs build happens only in `ennoix.tests.loads` (Task 9). A RED shows up as a `throw`/eval error from `nix build`; GREEN builds.
 
-> **Option namespace:** options live at the eval's **top level** — `plugins.<name>.…` and `build.…` (NOT under an `ennoix.` prefix). This matches the spec and lets Plan 2's home-manager `submoduleWith` expose `config.programs.ennoix.build.package` without double-nesting.
+> **Option namespace:** options live at the eval's **top level** — `plugins.<name>.…` and `build.…` (NOT under an `ennoix.` prefix). Spec §11 delegates the exact option names to Plan 1; top-level names let Plan 2's home-manager `submoduleWith` expose `config.programs.ennoix.build.package` without double-nesting.
 
 > **Formatter note:** `nix fmt` runs treefmt with deadnix + statix + nixfmt + mdformat (`no-lambda-pattern-names = true`, so unused pattern args like `{ lib, pkgs ? null }` are not flagged). It may rewrite snippets, so a committed file can differ character-for-character from the snippet here. Verify each task with `nix build .#checks.x86_64-linux.formatting` plus `nix fmt`.
 
