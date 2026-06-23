@@ -28,8 +28,8 @@ ______________________________________________________________________
 - `modules/generation.nix` — enabled plugins → `build.initText`.
 - `modules/build.nix` — `build.{emacsWithPackages,package}` (default.el injection).
 - `modules/assertions.nix` — the `assertions` option + fail-loud package checks.
-- `modules/plugins/by-name/<plugin>/default.nix` — one per Phase-0 plugin (7 total).
-- `modules/plugins/default.nix` — `readDir`-collects every `by-name/<plugin>`.
+- `modules/plugins/<plugin>/default.nix` — one per Phase-0 plugin (7 total).
+- `modules/plugins/default.nix` — `readDir`-collects every `<plugin>/` directory beside it.
 - `modules/default.nix` — `{ lib }:` → `baseModules` (core ++ plugins).
 - `modules/eval-tests.nix` — `lib.runTests` suite, **through `evalEnnoix`** (Option 2).
 - `overlays/emacs-packages/default.nix` — the ennoix emacs-scope overrideScope stub (empty in Phase 0).
@@ -46,7 +46,7 @@ ______________________________________________________________________
 
 > Build the entire core so `evalEnnoix` works with zero plugins. The single RED→GREEN is: write `modules/eval-tests.nix` (it calls `evalEnnoix`) + wire the `ennoix.tests.unit` runner → it fails (no `evalEnnoix`); create all the core → it passes (`""` init, real derivation). Then prove delivery (empty example builds + loads). This is the bootstrap; per-plugin TDD starts in Task 2.
 
-**Files (create unless noted):** `overlays/emacs-packages/default.nix`, `modules/lib/mk-plugin.nix`, `modules/generation.nix`, `modules/build.nix`, `modules/assertions.nix`, `modules/plugins/by-name/.gitkeep`, `modules/plugins/default.nix`, `modules/default.nix`, `library/ennoix.nix`, `modules/eval-tests.nix`, `hydra-jobs/tests.nix`; MODIFY `library/default.nix`, `overlays/default.nix`, `flake.nix`.
+**Files (create unless noted):** `overlays/emacs-packages/default.nix`, `modules/lib/mk-plugin.nix`, `modules/generation.nix`, `modules/build.nix`, `modules/assertions.nix`, `modules/plugins/default.nix`, `modules/default.nix`, `library/ennoix.nix`, `modules/eval-tests.nix`, `hydra-jobs/tests.nix`; MODIFY `library/default.nix`, `overlays/default.nix`, `flake.nix`.
 
 - [ ] **Step 1: Write `modules/eval-tests.nix`** (the skeleton tests, through `evalEnnoix`)
 
@@ -232,11 +232,7 @@ in
 }
 ```
 
-- [ ] **Step 9: Create the plugins collector** (empty `by-name/` for now)
-
-```bash
-mkdir -p modules/plugins/by-name && touch modules/plugins/by-name/.gitkeep
-```
+- [ ] **Step 9: Create the plugins collector** (no plugin dirs yet — the empty catalog; no `.gitkeep` needed, since `modules/plugins/` already exists because `default.nix` lives in it)
 
 `modules/plugins/default.nix`:
 
@@ -244,7 +240,9 @@ mkdir -p modules/plugins/by-name && touch modules/plugins/by-name/.gitkeep
 { lib }:
 let
   mkPlugin = import ../lib/mk-plugin.nix { inherit lib; };
-  dir = ./by-name;
+  # ./. is modules/plugins/; the collector's own default.nix is a *file* (so it
+  # is filtered out), and every *directory* beside it is a plugin.
+  dir = ./.;
   names = builtins.attrNames (lib.filterAttrs (_: t: t == "directory") (builtins.readDir dir));
 in
 map (name: import (dir + "/${name}") { inherit mkPlugin; }) names
@@ -390,7 +388,7 @@ ______________________________________________________________________
 
 ## Task 2: First plugin (vertico) — the per-plugin TDD pattern through `evalEnnoix`
 
-**Files:** Create `modules/plugins/by-name/vertico/default.nix`; Test `modules/eval-tests.nix`.
+**Files:** Create `modules/plugins/vertico/default.nix`; Test `modules/eval-tests.nix`.
 
 - [ ] **Step 1: Add a failing test** (to `modules/eval-tests.nix`'s `runTests`)
 
@@ -406,7 +404,7 @@ ______________________________________________________________________
 Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
 Expected: FAIL — `evalEnnoix` errors that **the option `plugins` does not exist** (in Task 2 no module declares any `plugins.*` yet, so the whole `plugins` namespace is undeclared; from Task 3 on, with a plugin module present, the error is the more specific `plugins.<name>` does not exist).
 
-- [ ] **Step 3: Create `modules/plugins/by-name/vertico/default.nix`**
+- [ ] **Step 3: Create `modules/plugins/vertico/default.nix`**
 
 ```nix
 { mkPlugin }: mkPlugin { name = "vertico"; init = "(vertico-mode 1)"; }
@@ -421,7 +419,7 @@ Expected: PASS — enabling vertico (through `evalEnnoix`) emits `(vertico-mode 
 
 ```bash
 nix fmt
-git add modules/plugins/by-name/vertico modules/eval-tests.nix
+git add modules/plugins/vertico modules/eval-tests.nix
 git commit -m "feat: vertico plugin (curated vertico-mode activation)"
 ```
 
@@ -431,7 +429,7 @@ ______________________________________________________________________
 
 > `orderless` uses `:config` (sets `completion-styles`, no mode); `marginalia` is a minor mode like vertico.
 
-**Files:** Create `modules/plugins/by-name/{orderless,marginalia}/default.nix`; Test `modules/eval-tests.nix`.
+**Files:** Create `modules/plugins/{orderless,marginalia}/default.nix`; Test `modules/eval-tests.nix`.
 
 - [ ] **Step 1: Add failing tests**
 
@@ -453,7 +451,7 @@ Expected: FAIL — options `plugins.orderless`/`plugins.marginalia` do not exist
 
 - [ ] **Step 3: Create the two modules**
 
-`modules/plugins/by-name/orderless/default.nix`:
+`modules/plugins/orderless/default.nix`:
 
 ```nix
 { mkPlugin }: mkPlugin {
@@ -462,7 +460,7 @@ Expected: FAIL — options `plugins.orderless`/`plugins.marginalia` do not exist
 }
 ```
 
-`modules/plugins/by-name/marginalia/default.nix`:
+`modules/plugins/marginalia/default.nix`:
 
 ```nix
 { mkPlugin }: mkPlugin { name = "marginalia"; init = "(marginalia-mode 1)"; }
@@ -477,7 +475,7 @@ Expected: PASS.
 
 ```bash
 nix fmt
-git add modules/plugins/by-name/orderless modules/plugins/by-name/marginalia modules/eval-tests.nix
+git add modules/plugins/orderless modules/plugins/marginalia modules/eval-tests.nix
 git commit -m "feat: orderless + marginalia (completion stack)"
 ```
 
@@ -487,7 +485,7 @@ ______________________________________________________________________
 
 > All three are shipped with emacs 30.2 → `builtIn = true` (no derivation, `package = null`, not added to the closure).
 
-**Files:** Create `modules/plugins/by-name/{savehist,which-key,modus-themes}/default.nix`; Test `modules/eval-tests.nix`.
+**Files:** Create `modules/plugins/{savehist,which-key,modus-themes}/default.nix`; Test `modules/eval-tests.nix`.
 
 - [ ] **Step 1: Add failing tests**
 
@@ -517,19 +515,19 @@ Expected: FAIL — those options do not exist.
 
 - [ ] **Step 3: Create the three modules**
 
-`modules/plugins/by-name/savehist/default.nix`:
+`modules/plugins/savehist/default.nix`:
 
 ```nix
 { mkPlugin }: mkPlugin { name = "savehist"; builtIn = true; init = "(savehist-mode 1)"; }
 ```
 
-`modules/plugins/by-name/which-key/default.nix`:
+`modules/plugins/which-key/default.nix`:
 
 ```nix
 { mkPlugin }: mkPlugin { name = "which-key"; builtIn = true; init = "(which-key-mode 1)"; }
 ```
 
-`modules/plugins/by-name/modus-themes/default.nix`:
+`modules/plugins/modus-themes/default.nix`:
 
 ```nix
 { mkPlugin }: mkPlugin { name = "modus-themes"; builtIn = true; extraConfig = "(load-theme 'modus-operandi :no-confirm)"; }
@@ -544,7 +542,7 @@ Expected: PASS.
 
 ```bash
 nix fmt
-git add modules/plugins/by-name/savehist modules/plugins/by-name/which-key modules/plugins/by-name/modus-themes modules/eval-tests.nix
+git add modules/plugins/savehist modules/plugins/which-key modules/plugins/modus-themes modules/eval-tests.nix
 git commit -m "feat: savehist + which-key + modus-themes (built-ins)"
 ```
 
@@ -554,7 +552,7 @@ ______________________________________________________________________
 
 > magit binds via freeform `extraConfig` (the structured `bind` serializer is deferred, §self-review). Also adds the fail-loud test (a bad package → `evalEnnoix` throws → `tryEval` catches it) and points `examples.full` at the full 7-plugin config.
 
-**Files:** Create `modules/plugins/by-name/magit/default.nix`; Modify `modules/eval-tests.nix`, `overlays/default.nix`.
+**Files:** Create `modules/plugins/magit/default.nix`; Modify `modules/eval-tests.nix`, `overlays/default.nix`.
 
 - [ ] **Step 1: Add failing tests**
 
@@ -581,7 +579,7 @@ ______________________________________________________________________
 Run: `nix build .#legacyPackages.x86_64-linux.ennoix.tests.unit -L 2>&1 | tail -20`
 Expected: FAIL — `plugins.magit` does not exist; `testCatalogHasSeven` sees 6.
 
-- [ ] **Step 3: Create `modules/plugins/by-name/magit/default.nix`**
+- [ ] **Step 3: Create `modules/plugins/magit/default.nix`**
 
 ```nix
 { mkPlugin }: mkPlugin { name = "magit"; extraConfig = "(keymap-global-set \"C-x g\" #'magit-status)"; }
@@ -617,7 +615,7 @@ Expected: both PASS — catalog is 7, magit/fail-loud green, and the full 7-plug
 
 ```bash
 nix fmt
-git add modules/plugins/by-name/magit modules/eval-tests.nix overlays/default.nix
+git add modules/plugins/magit modules/eval-tests.nix overlays/default.nix
 git commit -m "feat: magit + fail-loud test + full 7-plugin example"
 ```
 
