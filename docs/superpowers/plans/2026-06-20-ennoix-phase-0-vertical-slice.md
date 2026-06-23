@@ -109,33 +109,48 @@ _eself: _esuper: { }
 {
   name,
   builtIn ? false,
+  # use-package keyword defaults — passthrough: the values are emitted as
+  # literal elisp verbatim (lists join into `:kw (…)`, lines into `:kw …`,
+  # bools into `:kw t`). Curated values are the option defaults; a user
+  # override REPLACES (mkOptionDefault priority). `extraConfig` sets `config`.
   init ? "",
   extraConfig ? "",
+  after ? [ ],
+  bind ? [ ],
+  commands ? [ ],
+  custom ? [ ],
+  hook ? [ ],
+  mode ? [ ],
+  defer ? false,
+  demand ? false,
 }:
 { ... }:
+let
+  inherit (lib) mkOption mkEnableOption types;
+in
 {
   options.plugins.${name} = {
-    enable = lib.mkEnableOption name;
-    package = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+    enable = mkEnableOption name;
+    package = mkOption {
+      type = types.nullOr types.str;
       default = if builtIn then null else name;
       description = "Package name in the emacs scope; `null` for a built-in.";
     };
-    init = lib.mkOption {
-      type = lib.types.lines;
-      default = init; # curated default (mkOptionDefault priority; user override replaces)
-      description = "Elisp emitted into the use-package `:init` block.";
-    };
-    config = lib.mkOption {
-      type = lib.types.lines;
-      default = extraConfig;
-      description = "Elisp emitted into the use-package `:config` block.";
-    };
+    after = mkOption { type = types.listOf types.str; default = after; }; # :after
+    bind = mkOption { type = types.listOf types.str; default = bind; }; # :bind  e.g. [ ''("C-x g" . magit-status)'' ]
+    commands = mkOption { type = types.listOf types.str; default = commands; }; # :commands
+    custom = mkOption { type = types.listOf types.str; default = custom; }; # :custom e.g. [ "(corfu-auto t)" ]
+    hook = mkOption { type = types.listOf types.str; default = hook; }; # :hook  e.g. [ "(prog-mode . foo-mode)" ]
+    mode = mkOption { type = types.listOf types.str; default = mode; }; # :mode
+    defer = mkOption { type = types.bool; default = defer; }; # :defer t
+    demand = mkOption { type = types.bool; default = demand; }; # :demand t
+    init = mkOption { type = types.lines; default = init; }; # :init
+    config = mkOption { type = types.lines; default = extraConfig; }; # :config
   };
 }
 ```
 
-> Builder arg is `extraConfig`; the option it sets is `config`. Plugin modules (Tasks 2–5) pass `extraConfig =`.
+> The builder exposes the **full passthrough keyword set** as option defaults: `init`/`config` (lines), `after`/`bind`/`commands`/`custom`/`hook`/`mode` (lists of literal-elisp strings), `defer`/`demand` (bools). "Passthrough" = the value is emitted verbatim; ennoix doesn't parse/type it. (The *typed* layer — structured Nix like `custom = { corfu-auto = true; }` coerced to elisp — is the separately-deferred piece.) The builder arg `extraConfig` sets the `config` option; plugin modules use `extraConfig =` for `:config`.
 
 - [ ] **Step 6: Create `modules/generation.nix`**
 
@@ -146,11 +161,23 @@ let
   # `or { }`: the empty catalog leaves `plugins` undeclared; a bare
   # `config.plugins` throws `attribute 'plugins' missing` (see build.nix).
   enabled = filterAttrs (_: p: p.enable) (config.plugins or { });
+  # emit one use-package keyword (passthrough: list items / lines are literal elisp)
+  listKw = kw: items: optional (items != [ ]) "  :${kw} (${concatStringsSep " " items})";
+  boolKw = kw: b: optional b "  :${kw} t";
+  linesKw = kw: s: optional (s != "") "  :${kw} ${s}";
   form = name: p:
     concatStringsSep "\n" (
       [ "(use-package ${name}" ]
-      ++ optional (p.init != "") "  :init ${p.init}"
-      ++ optional (p.config != "") "  :config ${p.config}"
+      ++ boolKw "demand" p.demand
+      ++ boolKw "defer" p.defer
+      ++ listKw "after" p.after
+      ++ listKw "commands" p.commands
+      ++ listKw "mode" p.mode
+      ++ listKw "hook" p.hook
+      ++ listKw "bind" p.bind
+      ++ listKw "custom" p.custom
+      ++ linesKw "init" p.init
+      ++ linesKw "config" p.config
       ++ [ "  )" ]
     );
 in
@@ -550,7 +577,7 @@ ______________________________________________________________________
 
 ## Task 5: magit + fail-loud + the full example
 
-> magit binds via freeform `extraConfig` (the structured `bind` serializer is deferred, §self-review). Also adds the fail-loud test (a bad package → `evalEnnoix` throws → `tryEval` catches it) and points `examples.full` at the full 7-plugin config.
+> magit binds via the `:bind` keyword (`bind = [ ''("C-x g" . magit-status)'' ]`), which **defers** the heavy magit package (autoloaded on `C-x g`) — verified: with `:bind`, magit is *not* loaded at startup, vs eager-loaded under `:init`/`:config`. Also adds the fail-loud test (a bad package → `evalEnnoix` throws → `tryEval` catches it) and points `examples.full` at the full 7-plugin config.
 
 **Files:** Create `modules/plugins/magit/default.nix`; Modify `modules/eval-tests.nix`, `overlays/default.nix`.
 
@@ -582,7 +609,7 @@ Expected: FAIL — `plugins.magit` does not exist; `testCatalogHasSeven` sees 6.
 - [ ] **Step 3: Create `modules/plugins/magit/default.nix`**
 
 ```nix
-{ mkPlugin }: mkPlugin { name = "magit"; extraConfig = "(keymap-global-set \"C-x g\" #'magit-status)"; }
+{ mkPlugin }: mkPlugin { name = "magit"; bind = [ ''("C-x g" . magit-status)'' ]; }
 ```
 
 - [ ] **Step 4: Point `examples.full` at the full config.** In `overlays/default.nix`, change the `examples.full` `modules` to enable all 7:
@@ -650,4 +677,4 @@ ______________________________________________________________________
 
 **Placeholder scan:** none; all code prototyped. ✓ **Naming/types:** top-level `plugins.*`/`build.*`; `evalEnnoix`/`makeEnnoix`/`mkPlugin`; `epkgs`/`pkgs` via `specialArgs`; `package` a name string; `extraConfig` builder arg → `config` option; `modules/default.nix` stable `{ lib }:`. ✓
 
-**Deliberate reconciliations (recorded):** top-level option names (delegated by §11; enables Plan-2 `submoduleWith`); configurable emacs binary (spec `cfg.package`, §6) deferred — Phase 0 hardcodes `pkgs.emacs` (30.2); magit's keybinding via freeform `extraConfig` (structured `bind` serializer deferred; all 7 curated values are literal elisp); `makeEnnoixWithModule` (§4.3) deferred; `build.emacsWithPackages` is forward-work for the Plan-2 HM adapter; `hydra-jobs/tests.nix` is single-eval-system (`supportedSystems` inert in Phase 0); `resolvePkgs` system-only branch unexercised in Phase 0 (noted in source).
+**Deliberate reconciliations (recorded):** top-level option names (delegated by §11; enables Plan-2 `submoduleWith`); configurable emacs binary (spec `cfg.package`, §6) deferred — Phase 0 hardcodes `pkgs.emacs` (30.2); the **full passthrough keyword set** (`init`/`config`/`after`/`bind`/`commands`/`custom`/`hook`/`mode`/`defer`/`demand`) is included — only the **typed value coercion** (structured Nix → elisp) is deferred (Phase-0 curated values are literal elisp); `makeEnnoixWithModule` (§4.3) deferred; `build.emacsWithPackages` is forward-work for the Plan-2 HM adapter; `hydra-jobs/tests.nix` is single-eval-system (`supportedSystems` inert in Phase 0); `resolvePkgs` system-only branch unexercised in Phase 0 (noted in source).
