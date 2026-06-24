@@ -407,6 +407,27 @@ Two override channels, kept distinct:
 - Pre-native-compiling the generated `default.el` (a non-blocking build
   optimization; default: do not, in v1).
 
+### Known limitations / deferred implementation notes (Phase-0)
+
+Discovered during the Phase-0 build (PR #1); each tracked as a GitHub issue for
+a future phase. (These are implementation-level notes, distinct from the
+design-level deferrals above.)
+
+- **`${` in generated elisp** — `modules/build.nix` splices `build.initText`
+  into a Nix `''` string; future catalog elisp containing a literal `${…}`
+  would be Nix-interpolated or error. ([#2](https://github.com/djacu/ennoix/issues/2))
+- **Untested passthrough keyword shapes** — generation emits
+  `:hook`/`:custom`/`:commands`/`:mode`/`:after`/`:defer`/`:demand` and
+  multi-line `:init`, but no Phase-0 plugin exercises them; the first consumer
+  of each should add a `tests.loads` assertion. ([#3](https://github.com/djacu/ennoix/issues/3))
+- **Load gate misses deferred `:config`** — `ennoix.tests.loads` only catches
+  errors in code that runs at startup; a broken `:config` in a deferred
+  (`:bind`) plugin is never triggered in `--batch`. ([#4](https://github.com/djacu/ennoix/issues/4))
+- **`build.emacsWithPackages` unused in Phase 0** — forward-work for the Plan-2
+  home-manager adapter; no consumer yet. ([#5](https://github.com/djacu/ennoix/issues/5))
+- Captured in source (not an issue): `library/ennoix.nix`'s `resolvePkgs`
+  system-only branch is unexercised and does not apply the repo overlay.
+
 ## 9. Catalog roadmap (emacs 30.2)
 
 Each phase is a shippable milestone; low-complexity / no-external-dep /
