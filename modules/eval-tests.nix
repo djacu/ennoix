@@ -26,4 +26,20 @@ lib.runTests {
     expr = lib.hasInfix "(vertico-mode 1)" (initOf [ { plugins.vertico.enable = true; } ]);
     expected = true;
   };
+  testOrderlessCompletionStyles = {
+    expr = lib.hasInfix "completion-styles '(orderless basic)" (initOf [
+      { plugins.orderless.enable = true; }
+    ]);
+    expected = true;
+  };
+  testOrderlessFileOverrides = {
+    expr = lib.hasInfix "completion-category-overrides '((file" (initOf [
+      { plugins.orderless.enable = true; }
+    ]);
+    expected = true;
+  };
+  testMarginaliaActivation = {
+    expr = lib.hasInfix "(marginalia-mode 1)" (initOf [ { plugins.marginalia.enable = true; } ]);
+    expected = true;
+  };
 }
