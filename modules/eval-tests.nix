@@ -22,4 +22,8 @@ lib.runTests {
     expr = lib.isDerivation (cfg [ ]).build.package;
     expected = true;
   };
+  testVerticoActivation = {
+    expr = lib.hasInfix "(vertico-mode 1)" (initOf [ { plugins.vertico.enable = true; } ]);
+    expected = true;
+  };
 }
