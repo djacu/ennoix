@@ -435,7 +435,9 @@ available-in-nixpkgs packages first. (External binaries noted; they use
 the `runtimePackages` channel, §5.3.)
 
 - **Phase 0 — MVP:** `vertico`, `orderless`, `marginalia`, `savehist`
-  (built-in), `which-key` (built-in ≥30), `modus-themes` (built-in ≥28),
+  (built-in), `which-key` (built-in ≥30), `modus-themes` (package — emacs
+  bundles the library only under `etc/themes`, off `load-path`, so the
+  package is used for overridability + a working use-package require),
   `magit` (+ `git`). → modern minibuffer + theme + git on launch.
 - **Phase 1 — minibuffer stack:** `consult`, `embark`, `embark-consult`,
   `wgrep` (+ `ripgrep` runtime binary — first `runtimePackages` use).
