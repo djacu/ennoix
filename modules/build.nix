@@ -26,6 +26,10 @@ let
     src = epkgs.callPackage (
       { runCommand, writeText }:
       let
+        # NOTE: build.initText is spliced verbatim into this '' string. Phase-0
+        # elisp contains no literal ${...}; future catalog elisp that does would
+        # be Nix-interpolated or error here — escape as ''${ or use a non-'' string.
+        # See https://github.com/djacu/ennoix/issues/2.
         text = writeText "default.el" ''
           ;;; default.el --- ennoix generated config  -*- lexical-binding: t; -*-
           ${config.build.initText}
@@ -42,6 +46,9 @@ let
   };
 in
 {
+  # emacsWithPackages: emacs with the plugin packages but WITHOUT the generated
+  # default.el — forward-work for the Plan-2 home-manager adapter; no Phase-0
+  # consumer (lazy, never realized). See https://github.com/djacu/ennoix/issues/5.
   options.build.emacsWithPackages = mkOption { type = types.package; };
   options.build.package = mkOption { type = types.package; };
   config.build.emacsWithPackages = epkgs.withPackages (_: pluginPkgs);

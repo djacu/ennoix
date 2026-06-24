@@ -83,6 +83,9 @@ let
           final.runCommand "ennoix-tests-unit" { } "touch $out"
         else
           throw "ennoix unit tests failed:\n${final.lib.generators.toPretty { } failures}";
+      # NOTE: this gate only catches errors in code that runs at STARTUP. A broken
+      # *deferred* :config body (e.g. a :bind plugin never triggered in --batch) is
+      # not exercised here. See https://github.com/djacu/ennoix/issues/4.
       tests.loads = final.runCommand "ennoix-tests-loads" { } ''
         export HOME=$(mktemp -d)
         ${final.ennoix.examples.full}/bin/emacs --batch \
