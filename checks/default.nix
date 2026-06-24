@@ -1,12 +1,24 @@
 inputs:
-inputs.self.library.supportedSystems (system: {
-  formatting = inputs.self.formatterModule.${system}.config.build.check inputs.self;
+let
 
-  pre-commit-check = inputs.pre-commit-hooks.lib.${system}.run {
-    src = inputs.self;
-    hooks = {
-      treefmt.enable = true;
-      treefmt.packageOverrides.treefmt = inputs.self.formatter.${system};
-    };
-  };
-})
+  inherit (inputs.nixpkgs-lib)
+    lib
+    ;
+
+  inherit (lib.attrsets)
+    mapAttrs
+    ;
+
+  inherit (lib.trivial)
+    const
+    flip
+    ;
+
+in
+mapAttrs (flip (
+  const (system: {
+
+    formatting = inputs.self.formatterModule.${system}.config.build.check inputs.self;
+
+  })
+)) inputs.self.legacyPackages

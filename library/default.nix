@@ -1,29 +1,37 @@
 inputs:
-let
-  inherit (builtins)
-    attrNames
-    readDir
-    ;
 
-  inherit (inputs.nixpkgs)
+let
+
+  inherit (inputs.nixpkgs-lib)
     lib
     ;
 
-  inherit (lib.attrsets)
-    filterAttrs
-    genAttrs
+  inherit (lib.fixedPoints)
+    makeExtensible
     ;
+
+  library = makeExtensible (
+    self:
+    let
+      callLibs =
+        file:
+        import file {
+          inherit lib;
+          library = self;
+        };
+    in
+    {
+
+      ennoix = import ./ennoix.nix {
+        inherit lib;
+        inherit (inputs) nixpkgs;
+      };
+      paths = callLibs ./paths.nix;
+      systems = callLibs ./systems.nix;
+
+    }
+  );
+
 in
-rec {
-  genDirectories = dir: genAttrs (getDirectories dir);
 
-  getDirectories =
-    path: attrNames (filterAttrs (_: fileType: fileType == "directory") (readDir path));
-
-  supportedSystems = genAttrs [
-    "aarch64-darwin"
-    "aarch64-linux"
-    "x86_64-darwin"
-    "x86_64-linux"
-  ];
-}
+library
