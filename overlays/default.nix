@@ -55,17 +55,53 @@ let
       directory = ./verification;
     };
 
+  ennoix = final: _prev: {
+    ennoix = {
+      examples.full = inputs.self.library.ennoix.makeEnnoix {
+        pkgs = final;
+        modules = [ ];
+      }; # empty for now; Task 5 fills it
+      tests.unit =
+        let
+          failures = import ../modules/eval-tests.nix {
+            inherit (final) lib;
+            pkgs = final;
+            evalEnnoix = inputs.self.library.ennoix.evalEnnoix;
+          };
+        in
+        if failures == [ ] then
+          final.runCommand "ennoix-tests-unit" { } "touch $out"
+        else
+          throw "ennoix unit tests failed:\n${final.lib.generators.toPretty { } failures}";
+      tests.loads = final.runCommand "ennoix-tests-loads" { } ''
+        export HOME=$(mktemp -d)
+        ${final.ennoix.examples.full}/bin/emacs --batch \
+          --eval '(package-activate-all)' \
+          --eval '(load (locate-library "default") nil t)' \
+          --eval '(message "ennoix-config-loaded-ok")' > log 2>&1 \
+          || { echo "emacs exited non-zero:"; cat log; exit 1; }
+        if grep -qiE 'error \(|lisp error|definition is void|wrong type|void-(function|variable)' log; then
+          echo "config produced an error at load:"; cat log; exit 1
+        fi
+        grep -q 'ennoix-config-loaded-ok' log || { echo "missing success marker:"; cat log; exit 1; }
+        touch $out
+      '';
+    };
+  };
+
   default = composeManyExtensions [
     fixes
     top-level
     python-packages
     verification
+    ennoix
   ];
 
 in
 {
   inherit
     default
+    ennoix
     fixes
     python-packages
     top-level

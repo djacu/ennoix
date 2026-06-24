@@ -23,6 +23,9 @@
     nixosModules = import ./nixosModules/default.nix inputs;
     nixosConfigurations = import ./nixosConfigurations/default.nix inputs;
     overlays = import ./overlays/default.nix inputs;
+    packages = inputs.self.library.systems.defaultSystems (system: {
+      default = inputs.self.legacyPackages.${system}.ennoix.examples.full;
+    });
 
   };
 
