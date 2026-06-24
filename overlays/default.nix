@@ -59,8 +59,18 @@ let
     ennoix = {
       examples.full = inputs.self.library.ennoix.makeEnnoix {
         pkgs = final;
-        modules = [ ];
-      }; # empty for now; Task 5 fills it
+        modules = [
+          {
+            plugins.vertico.enable = true;
+            plugins.orderless.enable = true;
+            plugins.marginalia.enable = true;
+            plugins.savehist.enable = true;
+            plugins.which-key.enable = true;
+            plugins.modus-themes.enable = true;
+            plugins.magit.enable = true;
+          }
+        ];
+      };
       tests.unit =
         let
           failures = import ../modules/eval-tests.nix {

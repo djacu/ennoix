@@ -64,4 +64,25 @@ lib.runTests {
     expr = (cfg [ { plugins.modus-themes.enable = true; } ]).plugins.modus-themes.package;
     expected = "modus-themes";
   };
+  testMagitBinding = {
+    expr = lib.hasInfix ''("C-x g" . magit-status)'' (initOf [ { plugins.magit.enable = true; } ]);
+    expected = true;
+  };
+  testFailLoud = {
+    # evalEnnoix throws when an enabled plugin's package isn't in the scope.
+    expr =
+      (builtins.tryEval
+        (cfg [
+          {
+            plugins.magit.enable = true;
+            plugins.magit.package = "no-such-pkg";
+          }
+        ]).build.package
+      ).success;
+    expected = false;
+  };
+  testCatalogHasSeven = {
+    expr = builtins.length (import ./plugins { inherit lib; }); # ./plugins — eval-tests.nix lives in modules/
+    expected = 7;
+  };
 }
