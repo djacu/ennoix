@@ -85,4 +85,35 @@ lib.runTests {
     expr = builtins.length (import ./plugins { inherit lib; }); # ./plugins — eval-tests.nix lives in modules/
     expected = 7;
   };
+  # ennoix's core claim: a user override REPLACES the curated default (curated
+  # values are option defaults at mkOptionDefault priority, so a user definition
+  # drops the default) — it does not merge/append.
+  testUserOverrideReplacesDefault = {
+    expr =
+      let
+        out = initOf [
+          {
+            plugins.vertico.enable = true;
+            plugins.vertico.init = "(my-custom-vertico-setup)";
+          }
+        ];
+      in
+      lib.hasInfix "(my-custom-vertico-setup)" out && !(lib.hasInfix "(vertico-mode 1)" out);
+    expected = true;
+  };
+  # Replacement holds for list-typed options too (the curated bind list is
+  # dropped, not merged with the user's).
+  testUserOverrideReplacesListDefault = {
+    expr =
+      let
+        out = initOf [
+          {
+            plugins.magit.enable = true;
+            plugins.magit.bind = [ ''("C-c m" . magit-dispatch)'' ];
+          }
+        ];
+      in
+      lib.hasInfix "magit-dispatch" out && !(lib.hasInfix "magit-status" out);
+    expected = true;
+  };
 }
