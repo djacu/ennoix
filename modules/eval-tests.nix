@@ -42,4 +42,26 @@ lib.runTests {
     expr = lib.hasInfix "(marginalia-mode 1)" (initOf [ { plugins.marginalia.enable = true; } ]);
     expected = true;
   };
+  testSavehistActivation = {
+    expr = lib.hasInfix "(savehist-mode 1)" (initOf [ { plugins.savehist.enable = true; } ]);
+    expected = true;
+  };
+  testWhichKeyActivation = {
+    expr = lib.hasInfix "(which-key-mode 1)" (initOf [ { plugins.which-key.enable = true; } ]);
+    expected = true;
+  };
+  testModusLoadsTheme = {
+    expr = lib.hasInfix "(load-theme 'modus-operandi" (initOf [
+      { plugins.modus-themes.enable = true; }
+    ]);
+    expected = true;
+  };
+  testBuiltinHasNoPackage = {
+    expr = (cfg [ { plugins.savehist.enable = true; } ]).plugins.savehist.package;
+    expected = null;
+  };
+  testModusThemesHasPackage = {
+    expr = (cfg [ { plugins.modus-themes.enable = true; } ]).plugins.modus-themes.package;
+    expected = "modus-themes";
+  };
 }
