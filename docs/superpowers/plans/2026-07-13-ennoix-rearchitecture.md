@@ -57,7 +57,7 @@ ______________________________________________________________________
 
 - Produces (later tasks rely on these EXACT names/shapes):
 
-  - `pkgs.ennoixEval : [module] -> config`, with `config.build.initText : string`, `config.build.package : derivation`, and per-entry `config.usePackage.<name>.{enable,package,runtimePackages,after,bind,commands,custom,hook,mode,defer,demand,init,config,assembly}`.
+  - `pkgs.ennoixEval : [module] -> config`, with `config.build.initText : string`, `config.build.package : derivation`, and per-entry `config.usePackage.<name>.{enable,package,runtimePackages,extraPackages,after,bind,bind',bindKeyMap,bindLocal,commands,custom,defines,functions,hook,interpreter,mode,defer,demand,init,config,assembly}`.
   - specialArgs available to all modules: `pkgs`, `mkCatalogDefault` (= `lib.mkOverride 1400`).
   - Catalog contract: every DIRECTORY `modules/catalog/<key>/` is an entry; its module is `module.nix`; the directory name IS the `usePackage` key.
   - `pkgs.ennoix-tests-eval` (derivation; throws at eval on test failure).
@@ -65,14 +65,15 @@ ______________________________________________________________________
 - [ ] **Step 1: Record the RED**
 
 Run: `nix build .#legacyPackages.x86_64-linux.ennoix-tests-eval 2>&1 | tail -3`
-Expected: FAIL — `error: attribute 'ennoix-tests-eval' missing` (nothing exists yet).
+Expected: FAIL — `error: flake '…' does not provide attribute … 'legacyPackages.x86_64-linux.ennoix-tests-eval'` (any missing-attribute failure is the RED; nothing exists yet).
 
 - [ ] **Step 2: Delete the Phase-0 machinery**
 
 ```bash
 git rm library/ennoix.nix modules/default.nix modules/lib/mk-plugin.nix modules/assertions.nix overlays/emacs-packages/default.nix
 git rm -r modules/plugins
-touch overlays/emacs-packages/.gitkeep
+# git rm deletes the emptied overlays/emacs-packages directory — recreate it
+mkdir -p overlays/emacs-packages && touch overlays/emacs-packages/.gitkeep
 ```
 
 - [ ] **Step 3: Restore `library/default.nix` to flake plumbing only** (full file)
@@ -137,6 +138,8 @@ library
 # NOTE: this submodule declares an OPTION named `config`; the module arg
 # `config` below is the submodule's own config, so the option is read as
 # `config.config`. Do not "fix" this — it mirrors rycee and use-package.
+# (Entries can only SET a `config` key in shorthand because the namespace
+# declares the submodule with shorthandOnlyDefinesConfig = true.)
 {
   name,
   config,
@@ -175,6 +178,12 @@ let
   linesKw = kw: s: optional (s != "") "  :${kw} ${s}";
   boolKw = kw: b: optional b "  :${kw} t";
   deferKw = d: if builtins.isBool d then optional d "  :defer t" else [ "  :defer ${toString d}" ];
+  bindPair = key: cmd: "(${quote key} . ${cmd})";
+  # one ":bind (:map <name> ...)" line per local keymap (rycee's emission;
+  # use-package merges repeated :bind occurrences)
+  bindLocalKw = mapAttrsToList (
+    mapName: pairs: "  :bind (:map ${mapName} ${concatStringsSep " " (mapAttrsToList bindPair pairs)})"
+  );
 in
 {
   options = {
@@ -188,6 +197,11 @@ in
       default = [ ];
       description = "Non-elisp binaries placed on the built emacs's PATH.";
     };
+    extraPackages = mkOption {
+      type = types.listOf types.package;
+      default = [ ];
+      description = "Extra elisp packages installed without a use-package form of their own.";
+    };
     after = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -196,6 +210,21 @@ in
       type = types.attrsOf types.str;
       default = { };
       description = ":bind — key = keybinding string, value = command.";
+    };
+    bind' = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = ":bind* — like bind, but overrides minor-mode maps.";
+    };
+    bindKeyMap = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = ":bind-keymap — key = keybinding string, value = keymap.";
+    };
+    bindLocal = mkOption {
+      type = types.attrsOf (types.attrsOf types.str);
+      default = { };
+      description = "Local keymap binds: keymap name -> { key = command; }.";
     };
     commands = mkOption {
       type = types.listOf types.str;
@@ -211,10 +240,22 @@ in
       );
       default = { };
     }; # :custom
+    defines = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+    }; # :defines (byte-compiler declarations)
+    functions = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+    }; # :functions (byte-compiler declarations)
     hook = mkOption {
       type = types.listOf types.str;
       default = [ ];
     }; # :hook — literal elisp pairs
+    interpreter = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+    }; # :interpreter — literal elisp pairs
     mode = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -249,9 +290,15 @@ in
     ++ deferKw config.defer
     ++ listKw "after" config.after
     ++ listKw "commands" config.commands
+    ++ listKw "defines" config.defines
+    ++ listKw "functions" config.functions
     ++ listKw "mode" config.mode
+    ++ listKw "interpreter" config.interpreter
     ++ listKw "hook" config.hook
-    ++ pairsKw "bind" (key: cmd: "(${quote key} . ${cmd})") config.bind
+    ++ pairsKw "bind" bindPair config.bind
+    ++ pairsKw "bind*" bindPair config.bind'
+    ++ pairsKw "bind-keymap" bindPair config.bindKeyMap
+    ++ bindLocalKw config.bindLocal
     ++ pairsKw "custom" (var: v: "(${var} ${toElisp v})") config.custom
     ++ linesKw "init" config.init
     ++ linesKw "config" config.config
@@ -274,6 +321,12 @@ in
         # Required: neither top-level specialArgs nor _module.args reach
         # submodules (verified in bare evalModules AND under NixOS).
         specialArgs = { inherit pkgs; };
+        # REQUIRED: the type declares an option named `config`, and entries
+        # set it in shorthand (usePackage.foo = { config = "..."; }). Raw
+        # submoduleWith defaults shorthandOnlyDefinesConfig = false, which
+        # parses such entries as full modules and breaks them
+        # (types.submodule hardcodes true; verified).
+        shorthandOnlyDefinesConfig = true;
       }
     );
     default = { };
@@ -327,7 +380,13 @@ let
     ;
   enabled = attrValues (filterAttrs (_: p: p.enable) config.usePackage);
   # No name resolution: option values ARE the derivations (null = built-in).
-  elispPkgs = map (p: p.package) (builtins.filter (p: p.package != null) enabled);
+  # extraPackages: per-entry elisp installed without a use-package form —
+  # symmetric with runtimePackages (build-level coverage arrives with the
+  # first catalog entry that uses it).
+  elispPkgs = unique (
+    map (p: p.package) (builtins.filter (p: p.package != null) enabled)
+    ++ concatMap (p: p.extraPackages) enabled
+  );
   runtimePkgs = unique (concatMap (p: p.runtimePackages) enabled);
   epkgs = pkgs.emacsPackages;
   # NOTE: build.initText is spliced verbatim into this '' string. Catalog
@@ -618,6 +677,44 @@ lib.runTests {
     ];
     expected = "(use-package probe\n  :defer 2\n  )";
   };
+  # bind variants: :bind*, :bind-keymap, and per-map local binds
+  testBindVariants = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          bind' = {
+            "C-c P" = "probe-override";
+          };
+          bindKeyMap = {
+            "C-c m" = "probe-command-map";
+          };
+          bindLocal = {
+            probe-mode-map = {
+              "x" = "probe-exec";
+            };
+          };
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :bind* ((\"C-c P\" . probe-override))\n  :bind-keymap ((\"C-c m\" . probe-command-map))\n  :bind (:map probe-mode-map (\"x\" . probe-exec))\n  )";
+  };
+  # byte-compiler declarations + :interpreter
+  testDeclarationKeywords = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          defines = [ "probe-var" ];
+          functions = [ "probe-fn" ];
+          interpreter = [ ''("probe" . probe-mode)'' ];
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :defines (probe-var)\n  :functions (probe-fn)\n  :interpreter ((\"probe\" . probe-mode))\n  )";
+  };
   # runtimePackages branch selection (eval-level: wrapped name prefix only;
   # the wrapper's runtime behavior was spike-verified and lands with Phase 1)
   testRuntimeWrapsPackage = {
@@ -764,7 +861,7 @@ ______________________________________________________________________
 - [ ] **Step 2: RED**
 
 Run: `nix build .#legacyPackages.x86_64-linux.ennoix-tests-eval 2>&1 | tail -5`
-Expected: FAIL — eval error `attribute 'orderless' missing` (reading `usePackage.orderless.assembly`: the entry exists only once a module or user defines it; no catalog module does yet). Any failure naming the new tests is the RED.
+Expected: FAIL — `error: savehist cannot be found in pkgs.emacsPackages`: `testSavehistIsBuiltin` forces the `mkPackageOption` declaration default before the catalog module defines `package = null`, and savehist (a core-emacs feature) has no `emacsPackages` attr. The throw aborts the whole `runTests` evaluation, so no per-test failure list is printed. (Once the catalog modules exist, orderless/magit would otherwise fail as string-mismatch records; the modus-themes and override-replacement tests already pass pre-catalog — that is expected.)
 
 - [ ] **Step 3: Create the six catalog modules**
 
@@ -842,7 +939,7 @@ git add -A
 nix build .#legacyPackages.x86_64-linux.ennoix-tests-eval -L
 ```
 
-Expected: builds (all 12 tests pass).
+Expected: builds (all 15 tests pass — 10 from Task 1, 5 from this task).
 
 - [ ] **Step 5: Commit**
 
@@ -984,7 +1081,7 @@ Expected: all pass.
 - [ ] **Step 2: Both hydra jobsets through the real runner**
 
 Run: `nix run .#verify-hydra-jobset -- hydra-jobs/tests.nix && nix run .#verify-hydra-jobset -- hydra-jobs/packages.nix`
-Expected: tests jobset builds `ennoix.ennoix-tests-{eval,load,load-full}`; packages jobset builds `ennoix-emacs`/`ennoix-emacs-full` (plus pre-existing top-level packages). `ennoixEval` appears as a harmless EMPTY job (release-lib maps non-derivations to `{ }` — expected, not an error).
+Expected: tests jobset builds `ennoix.ennoix-tests-{eval,load,load-full}`; packages jobset builds `ennoix-emacs`/`ennoix-emacs-full`. `ennoixEval` appears as a harmless EMPTY job (release-lib maps non-derivations to `{ }` — expected, not an error).
 
 - [ ] **Step 3: Runtime smoke test (activation + deferral survived the re-architecture)**
 
@@ -1022,4 +1119,4 @@ ______________________________________________________________________
 
 **Placeholder scan:** every code step carries full file contents or exact insertions; the one "identical except" (Task 3 load-full gate) names each difference explicitly. ✓
 
-**Type consistency:** `ennoixEval : [module] -> config` used identically in Tasks 1/3; `assemblyOf`/`cfg` helpers defined in Task 1's eval-tests and reused by Task 2's additions; catalog keys in Task 2 match Task 3's enables; `hello` threading matches between eval-tests.nix and its package.nix. Expected assembly strings follow the Task-1 emitter exactly (keyword order: demand, defer, after, commands, mode, hook, bind, custom, init, config; two-space indent; dangling `  )`; attrs iterate lexicographically). ✓
+**Type consistency:** `ennoixEval : [module] -> config` used identically in Tasks 1/3; `assemblyOf`/`cfg` helpers defined in Task 1's eval-tests and reused by Task 2's additions; catalog keys in Task 2 match Task 3's enables; `hello` threading matches between eval-tests.nix and its package.nix. Expected assembly strings follow the Task-1 emitter exactly (keyword order: demand, defer, after, commands, defines, functions, mode, interpreter, hook, bind, bind\*, bind-keymap, bindLocal, custom, init, config; two-space indent; dangling `  )`; attrs iterate lexicographically). Revised after the three-lens adversarial review (`shorthandOnlyDefinesConfig = true` — the critical fix; `mkdir -p` before the `.gitkeep`; corrected RED expectations; counts) and extended with the full built-in keyword set + `extraPackages` per the ratified spec update; the extended emitter and the `config`-key shorthand case are spike-verified. ✓

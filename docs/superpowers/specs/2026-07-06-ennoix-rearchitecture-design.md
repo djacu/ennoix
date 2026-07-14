@@ -187,6 +187,11 @@ Declared in **`modules/use-package.nix`**:
       # top-level specialArgs nor _module.args reach submodules (true in
       # bare evalModules AND under a real NixOS eval — submoduleWith spins
       # up a fresh isolated eval; lib/types.nix:1410)
+      shorthandOnlyDefinesConfig = true;  # required: the type declares an
+      # option named `config`; raw submoduleWith defaults this to false,
+      # which would parse shorthand entries carrying a `config` key as
+      # full modules (types.submodule hardcodes true; caught by the plan's
+      # adversarial review, then verified)
     });
     default = { };
   };
@@ -201,8 +206,9 @@ Declared in **`modules/use-package.nix`**:
 - `runtimePackages` — **`listOf package`**, default `[ ]`.
   Non-elisp binaries put on the built emacs's PATH (§6).
   Catalog modules write `{ pkgs, ... }: … runtimePackages = mkCatalogDefault [ pkgs.ripgrep ]`.
-- use-package keyword fields — adopted from rycee's field definitions and emitter (`assembly`) for the subset ennoix ships: `init`, `config` (lines), `bind` (structured `attrsOf str`, key = keybinding, value = command, emitted with rycee's quoting/escaping), `custom` (rycee's structured shape, `attrsOf` primitive — a deliberate change from Phase-0's raw-elisp list; no carried config uses it), `hook`, `after`, `mode` (lists), `commands` (**deliberate rename** of rycee's singular `command`, matching the `:commands` keyword and Phase-0 naming), `defer`, `demand`.
-  Additional rycee fields (`bindLocal`, `bindKeyMap`, `diminish`, `chords`, `earlyInit`, …) are added to the shared type as need arises.
+- `extraPackages` — **`listOf package`**, default `[ ]`: extra elisp packages installed *without* a use-package form of their own (icon packs, dictionaries, grammars); the elisp analogue of `runtimePackages`.
+- use-package keyword fields — adopted from rycee's field definitions and emitter (`assembly`) for the **full built-in keyword set** (decision: the catalog build-out will surely need them; supersedes the earlier as-need-arises subset): `init`, `config` (lines), `bind` (structured `attrsOf str`, key = keybinding, value = command, emitted with rycee's quoting/escaping), `bind'` (`:bind*`, same shape), `bindKeyMap` (`:bind-keymap`, same shape), `bindLocal` (`attrsOf (attrsOf str)` — one `:bind (:map <name> …)` occurrence per local keymap, rycee's emission; use-package merges repeated keywords), `custom` (rycee's structured shape, `attrsOf` primitive — a deliberate change from Phase-0's raw-elisp list; no carried config uses it), `hook`, `after`, `mode`, `interpreter`, `defines`, `functions` (lists), `commands` (**deliberate rename** of rycee's singular `command`, matching the `:commands` keyword and Phase-0 naming), `defer`, `demand`.
+  Still excluded, with dispositions: `:diminish`/`:delight` (keyword handlers ship in core use-package but their *emitted code* requires external packages) and `:chords` (a keyword *registered by* the external `use-package-chords`) — all three need keyword→closure-injection machinery, deferred until a catalog entry wants them; rycee's `earlyInit` — deferred to the HM adapter plan (the standalone `default.el` path structurally cannot deliver early-init); rycee's `enableUsePackage` — dropped (niche install-without-form gate).
 - `assembly` — internal, read-only: the complete generated `use-package` form for this entry (rycee's design).
   Generation concatenates enabled entries' assemblies; tests assert on exact per-entry attribute paths.
 
@@ -248,7 +254,7 @@ modules/catalog/
 Mechanics carry over from Phase 0 (all previously verified) with the namespace/type swapped.
 `modules/generation.nix` and `modules/build.nix` survive as the `build.*` modules (options `build.initText`, `build.package`); generation.nix's central `form` emitter is replaced by the shared type's per-entry `assembly`:
 
-- Per-entry `assembly` (shared type) → concatenated init text — **entries in attribute-name (lexicographic) order, joined with blank lines, Phase-0 behavior; the old design's prelude/postlude/global freeform buckets are dropped (per-entry `init`/`config` is the only elisp channel)** — → wrapped `default.el` (`trivialBuild`, header + `(provide 'default)` — the native-comp requirement) → `pkgs.emacsPackages.withPackages (elispPkgs ++ [ defaultEl ])` where `elispPkgs = map (p: p.package) (filter (p: p.enable && p.package != null) entries)` — **no name resolution; the option values are the derivations.**
+- Per-entry `assembly` (shared type) → concatenated init text — **entries in attribute-name (lexicographic) order, joined with blank lines, Phase-0 behavior; the old design's prelude/postlude/global freeform buckets are dropped (per-entry `init`/`config` is the only elisp channel)** — → wrapped `default.el` (`trivialBuild`, header + `(provide 'default)` — the native-comp requirement) → `pkgs.emacsPackages.withPackages (elispPkgs ++ [ defaultEl ])` where `elispPkgs = unique (map (p: p.package) (filter (p: p.package != null) enabled) ++ concatMap (p: p.extraPackages) enabled)` — **no name resolution; the option values are the derivations.**
 - **`runtimePackages`**: collected across enabled entries (`lib.unique`); when non-empty, the `withPackages` output is wrapped — `symlinkJoin` + `wrapProgram` (makeBinaryWrapper) over **every** `bin/*` with `--prefix PATH : ${lib.makeBinPath runtimePkgs}` — and **the wrapped result is what `build.package` holds**.
   Spike-verified (and independently re-verified by the review): in a clean `env -i` the wrapped emacs resolves `(executable-find "rg")` to the store path (emacs derives `exec-path` from PATH); `emacsclient`/`etags` preserved; elisp load-path and native-comp intact through the join.
   When empty, the output is byte-identical to the unwrapped package (Phase-0 parity).
