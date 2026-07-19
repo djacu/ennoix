@@ -181,6 +181,10 @@ lib.runTests {
     expr = lib.hasPrefix "ennoix-" (cfg [ { usePackage.consult.enable = true; } ]).build.package.name;
     expected = true;
   };
+  testEmbarkAssembly = {
+    expr = assemblyOf "embark" [ { usePackage.embark.enable = true; } ];
+    expected = "(use-package embark\n  :bind ((\"C-.\" . embark-act) (\"C-;\" . embark-dwim) (\"C-h B\" . embark-bindings))\n  :init (setq prefix-help-command #'embark-prefix-help-command)\n  :config (add-to-list 'display-buffer-alist\n             '(\"\\\\`\\\\*Embark Collect \\\\(Live\\\\|Completions\\\\)\\\\*\"\n               nil\n               (window-parameters (mode-line-format . none))))\n  )";
+  };
   # built-in: catalog's mkCatalogDefault (1400) must beat the type's
   # declaration default (1500) on a SCALAR — the case that hard-conflicts
   # at equal priority.
