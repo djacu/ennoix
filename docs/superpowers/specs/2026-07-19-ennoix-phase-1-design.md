@@ -204,6 +204,8 @@ ______________________________________________________________________
 
 Out of scope (later): the general profiles catalog beyond `consult-full` (doom-style multi-plugin bundles), a `bind` emitter that can express `[remap …]` vectors, HM/NixOS adapters, the rest of the roadmap.
 
+Explicitly deferred to its own design pass — a **personal vim-experience profile** (evil-mode + evil-collection + leader-key framework + terminal-safe/leader embark bindings). Unlike `consult-full` (additive), such a profile *replaces* curated defaults; the verified idiom for that is a three-layer priority ladder — catalog (`mkOverride 1400`) ← profile (`mkOverride ≈500`) ← user (plain 100), each layer replacing the one below (confirmed by `nix eval`). Phase 1 therefore ships **additive-only** profiles (all `consult-full` needs); the replacing-priority idiom is not built until that profile is.
+
 ______________________________________________________________________
 
 ## Appendix A — exact consult binding table (verified against consult README @ `8c6787e`)
