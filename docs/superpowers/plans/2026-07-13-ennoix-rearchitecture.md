@@ -1,5 +1,7 @@
 # ennoix Re-architecture Implementation Plan
 
+> **Status: implemented** — all four tasks executed and reviewed (subagent-driven); the implementation is the `6ca306e..7fbaa2b` range on `djacu/rearchitecture`. Review fixes were synced back into this document as they landed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace Phase 0's wiring with the re-architecture: a flat package set (`pkgs.ennoixEval`, `ennoix-emacs*`, `ennoix-tests-*`), one `usePackage` namespace over a shared rycee-style type, a `catalog/<name>/module.nix` catalog at `mkOverride 1400`, and path-collected test/package jobsets.
