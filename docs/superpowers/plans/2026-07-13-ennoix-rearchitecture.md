@@ -844,7 +844,7 @@ ______________________________________________________________________
 **Files:**
 
 - Create: `modules/catalog/{orderless,marginalia,savehist,which-key,modus-themes,magit}/module.nix`
-- Modify: `modules/eval-tests.nix` (add 5 tests; keep all Task-1 tests)
+- Modify: `modules/eval-tests.nix` (add 6 tests; keep all Task-1 tests)
 
 **Interfaces:**
 
@@ -890,6 +890,18 @@ ______________________________________________________________________
       }
     ];
     expected = "(use-package magit\n  :bind ((\"C-c g\" . magit-dispatch))\n  )";
+  };
+  # The dotted-path form is a definition of the WHOLE bind option too —
+  # it looks additive but replaces the catalog default wholesale, exactly
+  # like the full-attrset form above (same option, same priority 100).
+  testUserDottedPathAlsoReplaces = {
+    expr = assemblyOf "magit" [
+      {
+        usePackage.magit.enable = true;
+        usePackage.magit.bind."C-c M-g" = "magit-file-dispatch";
+      }
+    ];
+    expected = "(use-package magit\n  :bind ((\"C-c M-g\" . magit-file-dispatch))\n  )";
   };
 ```
 
@@ -974,7 +986,7 @@ git add -A
 nix build .#legacyPackages.x86_64-linux.ennoix-tests-eval -L
 ```
 
-Expected: builds (all 17 tests pass — 12 from Task 1, 5 from this task).
+Expected: builds (all 18 tests pass — 12 from Task 1, 6 from this task).
 
 - [ ] **Step 5: Commit**
 
