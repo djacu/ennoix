@@ -162,4 +162,52 @@ lib.runTests {
     expr = lib.hasPrefix "ennoix-" (cfg [ { usePackage.vertico.enable = true; } ]).build.package.name;
     expected = false;
   };
+  testOrderlessAssembly = {
+    expr = assemblyOf "orderless" [ { usePackage.orderless.enable = true; } ];
+    expected = "(use-package orderless\n  :config (setq completion-styles '(orderless basic) completion-category-overrides '((file (styles basic partial-completion))))\n  )";
+  };
+  testMagitAssembly = {
+    expr = assemblyOf "magit" [ { usePackage.magit.enable = true; } ];
+    expected = "(use-package magit\n  :bind ((\"C-x g\" . magit-status))\n  )";
+  };
+  # built-in: catalog's mkCatalogDefault (1400) must beat the type's
+  # declaration default (1500) on a SCALAR — the case that hard-conflicts
+  # at equal priority.
+  testSavehistIsBuiltin = {
+    expr = (cfg [ { usePackage.savehist.enable = true; } ]).usePackage.savehist.package;
+    expected = null;
+  };
+  # recorded policy: modus-themes is a PACKAGE, not a built-in
+  testModusThemesPackage = {
+    expr = (cfg [ { usePackage.modus-themes.enable = true; } ]).usePackage.modus-themes.package.pname;
+    expected = "modus-themes";
+  };
+  # THE override-replacement contract (kept by decision): a user plain
+  # definition REPLACES a mkCatalogDefault value for a mergeable field —
+  # exact equality proves the curated binding is GONE, not merged in.
+  testUserOverrideReplacesCatalogBind = {
+    expr = assemblyOf "magit" [
+      {
+        usePackage.magit = {
+          enable = true;
+          bind = {
+            "C-c g" = "magit-dispatch";
+          };
+        };
+      }
+    ];
+    expected = "(use-package magit\n  :bind ((\"C-c g\" . magit-dispatch))\n  )";
+  };
+  # The dotted-path form is a definition of the WHOLE bind option too —
+  # it looks additive but replaces the catalog default wholesale, exactly
+  # like the full-attrset form above (same option, same priority 100).
+  testUserDottedPathAlsoReplaces = {
+    expr = assemblyOf "magit" [
+      {
+        usePackage.magit.enable = true;
+        usePackage.magit.bind."C-c M-g" = "magit-file-dispatch";
+      }
+    ];
+    expected = "(use-package magit\n  :bind ((\"C-c M-g\" . magit-file-dispatch))\n  )";
+  };
 }
