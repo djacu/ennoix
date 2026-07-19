@@ -22,10 +22,6 @@ let
     in
     {
 
-      ennoix = import ./ennoix.nix {
-        inherit lib;
-        inherit (inputs) nixpkgs;
-      };
       paths = callLibs ./paths.nix;
       systems = callLibs ./systems.nix;
 

@@ -1,119 +1,213 @@
-# Pure-eval tests through the real entrypoint. `lib.runTests` → [] when all pass.
+# Pure-eval tests through the real entrypoint. `lib.runTests` -> [] when all pass.
+# Emitter-shape EQUALITY tests on per-entry assembly paths (no hasInfix).
 {
   lib,
-  pkgs,
-  evalEnnoix,
+  ennoixEval,
+  hello,
 }:
 let
-  cfg =
-    mods:
-    evalEnnoix {
-      inherit pkgs;
-      modules = mods;
-    };
-  initOf = mods: (cfg mods).build.initText;
+  cfg = ennoixEval;
+  assemblyOf = name: modules: (cfg modules).usePackage.${name}.assembly;
 in
 lib.runTests {
-  testEmptyInit = {
-    expr = initOf [ ];
+  testEmptyInitText = {
+    expr = (cfg [ ]).build.initText;
     expected = "";
   };
-  testEmptyIsDerivation = {
+  testEmptyBuildIsDerivation = {
     expr = lib.isDerivation (cfg [ ]).build.package;
     expected = true;
   };
-  testVerticoActivation = {
-    expr = lib.hasInfix "(vertico-mode 1)" (initOf [ { plugins.vertico.enable = true; } ]);
-    expected = true;
+  testVerticoAssembly = {
+    expr = assemblyOf "vertico" [ { usePackage.vertico.enable = true; } ];
+    expected = "(use-package vertico\n  :init (vertico-mode 1)\n  )";
   };
-  testOrderlessCompletionStyles = {
-    expr = lib.hasInfix "completion-styles '(orderless basic)" (initOf [
-      { plugins.orderless.enable = true; }
-    ]);
-    expected = true;
+  # bind: structured attrsOf str -> ("KEY" . command), key quoted/escaped
+  testBindShape = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          bind = {
+            "C-c p" = "probe-cmd";
+          };
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :bind ((\"C-c p\" . probe-cmd))\n  )";
   };
-  testOrderlessFileOverrides = {
-    expr = lib.hasInfix "completion-category-overrides '((file" (initOf [
-      { plugins.orderless.enable = true; }
-    ]);
-    expected = true;
+  # every remaining keyword emitter in one synthetic entry
+  # (custom iterates lexicographically: probe-count < probe-flag < probe-lit)
+  testKeywordShapes = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          demand = true;
+          after = [ "vertico" ];
+          commands = [ "probe-cmd" ];
+          mode = [ ''("dummy" . probe-mode)'' ];
+          hook = [ "(prog-mode . probe-mode)" ];
+          custom = {
+            probe-count = 3;
+            probe-flag = true;
+            probe-lit = ''"lit"'';
+          };
+          init = "(probe-setup)";
+          config = "(probe-finalize)";
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :demand t\n  :after (vertico)\n  :commands (probe-cmd)\n  :mode ((\"dummy\" . probe-mode))\n  :hook ((prog-mode . probe-mode))\n  :custom ((probe-count 3) (probe-flag t) (probe-lit \"lit\"))\n  :init (probe-setup)\n  :config (probe-finalize)\n  )";
   };
-  testMarginaliaActivation = {
-    expr = lib.hasInfix "(marginalia-mode 1)" (initOf [ { plugins.marginalia.enable = true; } ]);
-    expected = true;
+  testDeferNumber = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          defer = 2;
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :defer 2\n  )";
   };
-  testSavehistActivation = {
-    expr = lib.hasInfix "(savehist-mode 1)" (initOf [ { plugins.savehist.enable = true; } ]);
-    expected = true;
+  # bind variants: :bind*, :bind-keymap, and per-map local binds
+  testBindVariants = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          bind' = {
+            "C-c P" = "probe-override";
+          };
+          bindKeyMap = {
+            "C-c m" = "probe-command-map";
+          };
+          bindLocal = {
+            probe-mode-map = {
+              "x" = "probe-exec";
+            };
+          };
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :bind* ((\"C-c P\" . probe-override))\n  :bind-keymap ((\"C-c m\" . probe-command-map))\n  :bind (:map probe-mode-map (\"x\" . probe-exec))\n  )";
   };
-  testWhichKeyActivation = {
-    expr = lib.hasInfix "(which-key-mode 1)" (initOf [ { plugins.which-key.enable = true; } ]);
-    expected = true;
+  # bind keys escape backslashes as well as quotes
+  testBindKeyEscaping = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          bind = {
+            "C-\\" = "probe-cmd";
+          };
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :bind ((\"C-\\\\\" . probe-cmd))\n  )";
   };
-  testModusLoadsTheme = {
-    expr = lib.hasInfix "(load-theme 'modus-operandi" (initOf [
-      { plugins.modus-themes.enable = true; }
-    ]);
-    expected = true;
+  # an empty inner bindLocal map emits nothing (emptiness-guard parity)
+  testBindLocalEmptyMapOmitted = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          bindLocal = {
+            probe-mode-map = { };
+          };
+        };
+      }
+    ];
+    expected = "(use-package probe\n  )";
   };
-  testBuiltinHasNoPackage = {
-    expr = (cfg [ { plugins.savehist.enable = true; } ]).plugins.savehist.package;
-    expected = null;
+  # byte-compiler declarations + :interpreter
+  testDeclarationKeywords = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          defines = [ "probe-var" ];
+          functions = [ "probe-fn" ];
+          interpreter = [ ''("probe" . probe-mode)'' ];
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :defines (probe-var)\n  :functions (probe-fn)\n  :interpreter ((\"probe\" . probe-mode))\n  )";
   };
-  testModusThemesHasPackage = {
-    expr = (cfg [ { plugins.modus-themes.enable = true; } ]).plugins.modus-themes.package;
-    expected = "modus-themes";
-  };
-  testMagitBinding = {
-    expr = lib.hasInfix ''("C-x g" . magit-status)'' (initOf [ { plugins.magit.enable = true; } ]);
-    expected = true;
-  };
-  testFailLoud = {
-    # evalEnnoix throws when an enabled plugin's package isn't in the scope.
+  # runtimePackages branch selection (eval-level: wrapped name prefix only;
+  # the wrapper's runtime behavior was spike-verified and lands with Phase 1)
+  testRuntimeWrapsPackage = {
     expr =
-      (builtins.tryEval
+      lib.hasPrefix "ennoix-"
         (cfg [
           {
-            plugins.magit.enable = true;
-            plugins.magit.package = "no-such-pkg";
+            usePackage.probe = {
+              enable = true;
+              package = null;
+              runtimePackages = [ hello ];
+            };
           }
-        ]).build.package
-      ).success;
+        ]).build.package.name;
+    expected = true;
+  };
+  testNoRuntimeNoWrap = {
+    expr = lib.hasPrefix "ennoix-" (cfg [ { usePackage.vertico.enable = true; } ]).build.package.name;
     expected = false;
   };
-  testCatalogHasSeven = {
-    expr = builtins.length (import ./plugins { inherit lib; }); # ./plugins — eval-tests.nix lives in modules/
-    expected = 7;
+  testOrderlessAssembly = {
+    expr = assemblyOf "orderless" [ { usePackage.orderless.enable = true; } ];
+    expected = "(use-package orderless\n  :config (setq completion-styles '(orderless basic) completion-category-overrides '((file (styles basic partial-completion))))\n  )";
   };
-  # ennoix's core claim: a user override REPLACES the curated default (curated
-  # values are option defaults at mkOptionDefault priority, so a user definition
-  # drops the default) — it does not merge/append.
-  testUserOverrideReplacesDefault = {
-    expr =
-      let
-        out = initOf [
-          {
-            plugins.vertico.enable = true;
-            plugins.vertico.init = "(my-custom-vertico-setup)";
-          }
-        ];
-      in
-      lib.hasInfix "(my-custom-vertico-setup)" out && !(lib.hasInfix "(vertico-mode 1)" out);
-    expected = true;
+  testMagitAssembly = {
+    expr = assemblyOf "magit" [ { usePackage.magit.enable = true; } ];
+    expected = "(use-package magit\n  :bind ((\"C-x g\" . magit-status))\n  )";
   };
-  # Replacement holds for list-typed options too (the curated bind list is
-  # dropped, not merged with the user's).
-  testUserOverrideReplacesListDefault = {
-    expr =
-      let
-        out = initOf [
-          {
-            plugins.magit.enable = true;
-            plugins.magit.bind = [ ''("C-c m" . magit-dispatch)'' ];
-          }
-        ];
-      in
-      lib.hasInfix "magit-dispatch" out && !(lib.hasInfix "magit-status" out);
-    expected = true;
+  # built-in: catalog's mkCatalogDefault (1400) must beat the type's
+  # declaration default (1500) on a SCALAR — the case that hard-conflicts
+  # at equal priority.
+  testSavehistIsBuiltin = {
+    expr = (cfg [ { usePackage.savehist.enable = true; } ]).usePackage.savehist.package;
+    expected = null;
+  };
+  # recorded policy: modus-themes is a PACKAGE, not a built-in
+  testModusThemesPackage = {
+    expr = (cfg [ { usePackage.modus-themes.enable = true; } ]).usePackage.modus-themes.package.pname;
+    expected = "modus-themes";
+  };
+  # THE override-replacement contract (kept by decision): a user plain
+  # definition REPLACES a mkCatalogDefault value for a mergeable field —
+  # exact equality proves the curated binding is GONE, not merged in.
+  testUserOverrideReplacesCatalogBind = {
+    expr = assemblyOf "magit" [
+      {
+        usePackage.magit = {
+          enable = true;
+          bind = {
+            "C-c g" = "magit-dispatch";
+          };
+        };
+      }
+    ];
+    expected = "(use-package magit\n  :bind ((\"C-c g\" . magit-dispatch))\n  )";
+  };
+  # The dotted-path form is a definition of the WHOLE bind option too —
+  # it looks additive but replaces the catalog default wholesale, exactly
+  # like the full-attrset form above (same option, same priority 100).
+  testUserDottedPathAlsoReplaces = {
+    expr = assemblyOf "magit" [
+      {
+        usePackage.magit.enable = true;
+        usePackage.magit.bind."C-c M-g" = "magit-file-dispatch";
+      }
+    ];
+    expected = "(use-package magit\n  :bind ((\"C-c M-g\" . magit-file-dispatch))\n  )";
   };
 }

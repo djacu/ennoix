@@ -1,7 +1,11 @@
 # ennoix architecture design
 
-Status: draft for review · Date: 2026-06-20 · Companion: see
-`2026-06-07-emacs-primer.md` for the emacs/nix background this assumes.
+Status: partially superseded by
+`2026-07-06-ennoix-rearchitecture-design.md` (the package-set / eval /
+option-namespace sections are replaced; the emacs mechanics — default.el
+injection, autoloads, use-package targeting — remain valid) · Date:
+2026-06-20 · Companion: see `2026-06-07-emacs-primer.md` for the
+emacs/nix background this assumes.
 
 This document specifies the **architecture**. It backs a *sequence* of
 implementation plans, not one (see §11); the first plan is a Phase-0

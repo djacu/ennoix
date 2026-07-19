@@ -24,7 +24,7 @@
     nixosConfigurations = import ./nixosConfigurations/default.nix inputs;
     overlays = import ./overlays/default.nix inputs;
     packages = inputs.self.library.systems.defaultSystems (system: {
-      default = inputs.self.legacyPackages.${system}.ennoix.examples.full;
+      default = inputs.self.legacyPackages.${system}.ennoix-emacs;
     });
 
   };
