@@ -170,6 +170,17 @@ lib.runTests {
     expr = assemblyOf "magit" [ { usePackage.magit.enable = true; } ];
     expected = "(use-package magit\n  :bind ((\"C-x g\" . magit-status))\n  )";
   };
+  testConsultAssembly = {
+    expr = assemblyOf "consult" [ { usePackage.consult.enable = true; } ];
+    expected = "(use-package consult\n  :bind ((\"C-x b\" . consult-buffer) (\"M-g g\" . consult-goto-line) (\"M-g i\" . consult-imenu) (\"M-s l\" . consult-line) (\"M-s r\" . consult-ripgrep) (\"M-y\" . consult-yank-pop))\n  :bind (:map isearch-mode-map (\"M-s l\" . consult-line))\n  :custom ((consult-narrow-key \"<\"))\n  :init (advice-add #'register-preview :override #'consult-register-window)\n(setq register-preview-delay 0.5)\n(setq xref-show-xrefs-function #'consult-xref\n      xref-show-definitions-function #'consult-xref)\n  :config (consult-customize consult-ripgrep :preview-key '(:debounce 0.4 any))\n  )";
+  };
+  # consult declares runtimePackages = [ ripgrep ]; build.package must be the
+  # symlinkJoin-wrapped emacs (name gains the "ennoix-" prefix). Branch-selected
+  # check per testRuntimeWrapsPackage; rg-on-PATH is build/interactive only.
+  testConsultRuntimeWraps = {
+    expr = lib.hasPrefix "ennoix-" (cfg [ { usePackage.consult.enable = true; } ]).build.package.name;
+    expected = true;
+  };
   # built-in: catalog's mkCatalogDefault (1400) must beat the type's
   # declaration default (1500) on a SCALAR — the case that hard-conflicts
   # at equal priority.
