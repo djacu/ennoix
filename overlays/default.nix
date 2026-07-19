@@ -55,51 +55,30 @@ let
       directory = ./verification;
     };
 
-  ennoix = final: _prev: {
-    ennoix = {
-      examples.full = inputs.self.library.ennoix.makeEnnoix {
-        pkgs = final;
-        modules = [
-          {
-            plugins.vertico.enable = true;
-            plugins.orderless.enable = true;
-            plugins.marginalia.enable = true;
-            plugins.savehist.enable = true;
-            plugins.which-key.enable = true;
-            plugins.modus-themes.enable = true;
-            plugins.magit.enable = true;
-          }
-        ];
-      };
-      tests.unit =
-        let
-          failures = import ../modules/eval-tests.nix {
-            inherit (final) lib;
-            pkgs = final;
-            evalEnnoix = inputs.self.library.ennoix.evalEnnoix;
-          };
-        in
-        if failures == [ ] then
-          final.runCommand "ennoix-tests-unit" { } "touch $out"
-        else
-          throw "ennoix unit tests failed:\n${final.lib.generators.toPretty { } failures}";
-      # NOTE: this gate only catches errors in code that runs at STARTUP. A broken
-      # *deferred* :config body (e.g. a :bind plugin never triggered in --batch) is
-      # not exercised here. See https://github.com/djacu/ennoix/issues/4.
-      tests.loads = final.runCommand "ennoix-tests-loads" { } ''
-        export HOME=$(mktemp -d)
-        ${final.ennoix.examples.full}/bin/emacs --batch \
-          --eval '(package-activate-all)' \
-          --eval '(load (locate-library "default") nil t)' \
-          --eval '(message "ennoix-config-loaded-ok")' > log 2>&1 \
-          || { echo "emacs exited non-zero:"; cat log; exit 1; }
-        if grep -qiE 'error \(|lisp error|definition is void|wrong type|void-(function|variable)' log; then
-          echo "config produced an error at load:"; cat log; exit 1
-        fi
-        grep -q 'ennoix-config-loaded-ok' log || { echo "missing success marker:"; cat log; exit 1; }
-        touch $out
-      '';
+  # ennoix test derivations; hydra-jobs/tests.nix collects this slot by
+  # directory name (the same jobset<->directory pairing as packages.nix).
+  tests =
+    final: prev:
+    packagesFromDirectoryRecursive {
+      inherit (final) callPackage;
+      inherit (prev) newScope;
+      directory = ./tests;
     };
+
+  # ennoix's emacs-scope extension: catalog-gap packages as
+  # emacs-packages/<name>/package.nix, callPackage'd against the SCOPE
+  # (with pkgs fallback). Wraps the FUNCTION so every produced scope —
+  # pkgs.emacsPackages, emacs.pkgs, variant bases — carries the extension.
+  emacs-packages = _final: prev: {
+    emacsPackagesFor =
+      emacs:
+      (prev.emacsPackagesFor emacs).overrideScope (
+        eself: _esuper:
+        packagesFromDirectoryRecursive {
+          inherit (eself) callPackage newScope;
+          directory = ./emacs-packages;
+        }
+      );
   };
 
   default = composeManyExtensions [
@@ -107,16 +86,18 @@ let
     top-level
     python-packages
     verification
-    ennoix
+    tests
+    emacs-packages
   ];
 
 in
 {
   inherit
     default
-    ennoix
+    emacs-packages
     fixes
     python-packages
+    tests
     top-level
     ;
 }

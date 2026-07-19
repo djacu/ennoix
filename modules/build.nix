@@ -1,56 +1,73 @@
 {
   config,
   lib,
-  epkgs,
+  pkgs,
   ...
 }:
 let
   inherit (lib)
-    types
-    mkOption
+    attrValues
+    concatMap
     filterAttrs
-    mapAttrsToList
+    makeBinPath
+    mkOption
+    types
+    unique
     ;
-  # `config.plugins or { }`: with an empty catalog (zero plugin modules) the
-  # `plugins` option is undeclared, so a bare `config.plugins` throws
-  # `attribute 'plugins' missing`. The `or { }` makes the empty case safe.
-  enabledWithPkg = filterAttrs (_: p: p.enable && p.package != null) (config.plugins or { });
-  pluginPkgs = mapAttrsToList (_: p: epkgs.${p.package}) enabledWithPkg;
-  # Always wrap with a header + `(provide 'default)`. A truly EMPTY (or
-  # comment-only) default.el fails native-compilation on emacs 30.2
-  # (`native-compiler-error-empty-byte`); a single real form fixes it.
-  # The initText option itself stays "" when nothing is enabled.
+  enabled = attrValues (filterAttrs (_: p: p.enable) config.usePackage);
+  # No name resolution: option values ARE the derivations (null = built-in).
+  # extraPackages: per-entry elisp installed without a use-package form —
+  # symmetric with runtimePackages (build-level coverage arrives with the
+  # first catalog entry that uses it).
+  elispPkgs = unique (
+    map (p: p.package) (builtins.filter (p: p.package != null) enabled)
+    ++ concatMap (p: p.extraPackages) enabled
+  );
+  runtimePkgs = unique (concatMap (p: p.runtimePackages) enabled);
+  epkgs = pkgs.emacsPackages;
+  # NOTE: build.initText is spliced verbatim into this '' string. Catalog
+  # elisp containing a literal ${...} would be Nix-interpolated or error —
+  # escape as ''${ when it first appears. https://github.com/djacu/ennoix/issues/2
+  # Always wrap with a header + (provide 'default): a truly EMPTY default.el
+  # fails native-compilation on emacs 30.2 (native-compiler-error-empty-byte).
   defaultEl = epkgs.trivialBuild {
     pname = "default";
     version = "0";
-    src = epkgs.callPackage (
-      { runCommand, writeText }:
-      let
-        # NOTE: build.initText is spliced verbatim into this '' string. Phase-0
-        # elisp contains no literal ${...}; future catalog elisp that does would
-        # be Nix-interpolated or error here — escape as ''${ or use a non-'' string.
-        # See https://github.com/djacu/ennoix/issues/2.
-        text = writeText "default.el" ''
-          ;;; default.el --- ennoix generated config  -*- lexical-binding: t; -*-
-          ${config.build.initText}
-          (provide 'default)
-          ;;; default.el ends here
-        '';
-      in
-      runCommand "ennoix-default-src" { } ''
-        mkdir -p "$out"
-        cp ${text} "$out/default.el"
-      ''
-    ) { };
-    packageRequires = pluginPkgs;
+    src = pkgs.runCommand "ennoix-default-src" { } ''
+      mkdir -p "$out"
+      cp ${pkgs.writeText "default.el" ''
+        ;;; default.el --- ennoix generated config  -*- lexical-binding: t; -*-
+        ${config.build.initText}
+        (provide 'default)
+        ;;; default.el ends here
+      ''} "$out/default.el"
+    '';
+    packageRequires = elispPkgs;
   };
+  emacsPkg = epkgs.withPackages (_: elispPkgs ++ [ defaultEl ]);
+  # runtimePackages: wrap EVERY binary (emacs, emacsclient, etags, ...) so
+  # the binaries are on PATH purely (emacs derives exec-path from PATH).
+  # When empty, the output is byte-identical to the unwrapped package.
+  withRuntime =
+    if runtimePkgs == [ ] then
+      emacsPkg
+    else
+      pkgs.symlinkJoin {
+        name = "ennoix-${emacsPkg.name}";
+        paths = [ emacsPkg ];
+        nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
+        postBuild = ''
+          for prog in "$out"/bin/*; do
+            wrapProgram "$prog" --prefix PATH : "${makeBinPath runtimePkgs}"
+          done
+        '';
+        inherit (emacsPkg) meta;
+      };
 in
 {
-  # emacsWithPackages: emacs with the plugin packages but WITHOUT the generated
-  # default.el — forward-work for the Plan-2 home-manager adapter; no Phase-0
-  # consumer (lazy, never realized). See https://github.com/djacu/ennoix/issues/5.
-  options.build.emacsWithPackages = mkOption { type = types.package; };
-  options.build.package = mkOption { type = types.package; };
-  config.build.emacsWithPackages = epkgs.withPackages (_: pluginPkgs);
-  config.build.package = epkgs.withPackages (_: pluginPkgs ++ [ defaultEl ]);
+  options.build.package = mkOption {
+    type = types.package;
+    description = "The final runnable emacs (runtime-wrapped when any entry declares runtimePackages).";
+  };
+  config.build.package = withRuntime;
 }

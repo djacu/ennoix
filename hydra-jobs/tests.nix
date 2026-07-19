@@ -7,14 +7,14 @@
   nixpkgs ? null,
 }@args:
 let
-  inherit (import ./common.nix args) lib releaseLib;
+  inherit (import ./common.nix args) lib releaseLib self;
   inherit (releaseLib) pkgs;
-  inherit (lib.attrsets) recurseIntoAttrs;
+  inherit (self.library.paths) getDirectoryNames;
+  inherit (lib.attrsets) getAttrs recurseIntoAttrs;
 in
-# Single-eval-system jobset (releaseLib.pkgs is built at evalSystem; we don't
-# use mapTestOn, so supportedSystems is inert here — aligns with
-# verify-hydra-jobset's single-system --arg). Test derivations have no
-# meta.platforms, so collect with recurseIntoAttrs; nix-eval-jobs --force-recurse walks it.
+# Single-eval-system jobset (no mapTestOn; test derivations carry no
+# meta.platforms). Collected purely by path from overlays/tests — the same
+# jobset<->directory pairing as packages.nix <-> overlays/top-level.
 recurseIntoAttrs {
-  ennoix = recurseIntoAttrs pkgs.ennoix.tests;
+  ennoix = recurseIntoAttrs (getAttrs (getDirectoryNames ../overlays/tests) pkgs);
 }
