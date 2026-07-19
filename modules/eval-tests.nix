@@ -189,6 +189,10 @@ lib.runTests {
     expr = assemblyOf "embark-consult" [ { usePackage.embark-consult.enable = true; } ];
     expected = "(use-package embark-consult\n  :after (embark consult)\n  )";
   };
+  testWgrepAssembly = {
+    expr = assemblyOf "wgrep" [ { usePackage.wgrep.enable = true; } ];
+    expected = "(use-package wgrep\n  :demand t\n  )";
+  };
   # built-in: catalog's mkCatalogDefault (1400) must beat the type's
   # declaration default (1500) on a SCALAR — the case that hard-conflicts
   # at equal priority.
