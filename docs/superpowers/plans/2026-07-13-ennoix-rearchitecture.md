@@ -150,6 +150,7 @@ library
 let
   inherit (lib)
     concatStringsSep
+    filterAttrs
     mapAttrsToList
     mkEnableOption
     mkOption
@@ -158,7 +159,7 @@ let
     types
     ;
 
-  quote = s: ''"${lib.strings.escape [ ''"'' ] s}"'';
+  quote = s: ''"${lib.strings.escape [ "\"" "\\" ] s}"'';
 
   # :custom value serialization: bool -> t/nil, int -> number,
   # string -> LITERAL elisp emitted verbatim (typed coercion stops here).
@@ -181,9 +182,11 @@ let
   bindPair = key: cmd: "(${quote key} . ${cmd})";
   # one ":bind (:map <name> ...)" line per local keymap (rycee's emission;
   # use-package merges repeated :bind occurrences)
-  bindLocalKw = mapAttrsToList (
-    mapName: pairs: "  :bind (:map ${mapName} ${concatStringsSep " " (mapAttrsToList bindPair pairs)})"
-  );
+  bindLocalKw =
+    maps:
+    mapAttrsToList (
+      mapName: pairs: "  :bind (:map ${mapName} ${concatStringsSep " " (mapAttrsToList bindPair pairs)})"
+    ) (filterAttrs (_: pairs: pairs != { }) maps);
 in
 {
   options = {
@@ -299,6 +302,8 @@ in
     ++ pairsKw "bind*" bindPair config.bind'
     ++ pairsKw "bind-keymap" bindPair config.bindKeyMap
     ++ bindLocalKw config.bindLocal
+    # NOTE: :custom attribute NAMES are spliced unescaped (rycee parity);
+    # exotic quoted-attr names are the catalog author's responsibility.
     ++ pairsKw "custom" (var: v: "(${var} ${toElisp v})") config.custom
     ++ linesKw "init" config.init
     ++ linesKw "config" config.config
@@ -700,6 +705,36 @@ lib.runTests {
     ];
     expected = "(use-package probe\n  :bind* ((\"C-c P\" . probe-override))\n  :bind-keymap ((\"C-c m\" . probe-command-map))\n  :bind (:map probe-mode-map (\"x\" . probe-exec))\n  )";
   };
+  # bind keys escape backslashes as well as quotes
+  testBindKeyEscaping = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          bind = {
+            "C-\\" = "probe-cmd";
+          };
+        };
+      }
+    ];
+    expected = "(use-package probe\n  :bind ((\"C-\\\\\" . probe-cmd))\n  )";
+  };
+  # an empty inner bindLocal map emits nothing (emptiness-guard parity)
+  testBindLocalEmptyMapOmitted = {
+    expr = assemblyOf "probe" [
+      {
+        usePackage.probe = {
+          enable = true;
+          package = null;
+          bindLocal = {
+            probe-mode-map = { };
+          };
+        };
+      }
+    ];
+    expected = "(use-package probe\n  )";
+  };
   # byte-compiler declarations + :interpreter
   testDeclarationKeywords = {
     expr = assemblyOf "probe" [
@@ -939,7 +974,7 @@ git add -A
 nix build .#legacyPackages.x86_64-linux.ennoix-tests-eval -L
 ```
 
-Expected: builds (all 15 tests pass — 10 from Task 1, 5 from this task).
+Expected: builds (all 17 tests pass — 12 from Task 1, 5 from this task).
 
 - [ ] **Step 5: Commit**
 
