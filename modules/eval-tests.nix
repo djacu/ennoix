@@ -191,7 +191,7 @@ lib.runTests {
   };
   testWgrepAssembly = {
     expr = assemblyOf "wgrep" [ { usePackage.wgrep.enable = true; } ];
-    expected = "(use-package wgrep\n  :demand t\n  )";
+    expected = "(use-package wgrep\n  :demand t\n  :custom ((wgrep-auto-save-buffer t))\n  )";
   };
   # built-in: catalog's mkCatalogDefault (1400) must beat the type's
   # declaration default (1500) on a SCALAR — the case that hard-conflicts

@@ -60,8 +60,8 @@ Additionally, `embark.el` auto-`require`s `embark-consult` via `(with-eval-after
 
 ### 1.4 wgrep
 
-`modules/catalog/wgrep/module.nix`: `demand = true` → emits `:demand t`, nothing else.
-Verified against wgrep source: `(add-hook 'grep-setup-hook 'wgrep-setup)` is an autoloaded top-level form; `wgrep-setup` installs `wgrep-enable-key` (defcustom, default `C-c C-p`) into each grep buffer's local map. The three README setqs (`wgrep-auto-save-buffer`, `wgrep-enable-key`, `wgrep-change-readonly-file`) are genuinely optional. So there is nothing to configure. `demand = true` mirrors the README's canonical `(require 'wgrep)`, costs ~nothing (tiny dependency-free file), and marks a deliberate "self-installing, nothing to configure" entry rather than an accidentally-empty module.
+`modules/catalog/wgrep/module.nix`: `demand = true` (→ `:demand t`) plus `custom.wgrep-auto-save-buffer = true` (→ `:custom ((wgrep-auto-save-buffer t))`).
+Verified against wgrep source: `(add-hook 'grep-setup-hook 'wgrep-setup)` is an autoloaded top-level form; `wgrep-setup` installs `wgrep-enable-key` (defcustom, default `C-c C-p`) into each grep buffer's local map. Of the three optional README setqs (`wgrep-auto-save-buffer`, `wgrep-enable-key`, `wgrep-change-readonly-file`), ennoix sets only `wgrep-auto-save-buffer = true` — a deliberate deviation from wgrep's default (`nil`) that makes `C-c C-c` (`wgrep-finish-edit`) write edits straight to disk, so bulk cross-file edits persist without a separate `C-x s` (decided via interactive testing — the default apply-to-buffers-only behavior was a footgun). `demand = true` mirrors the README's canonical `(require 'wgrep)` and costs ~nothing (tiny dependency-free file).
 
 ### 1.5 Flagship + coverage packages (Plan 1 wiring)
 
