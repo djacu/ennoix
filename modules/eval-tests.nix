@@ -193,6 +193,16 @@ lib.runTests {
     expr = assemblyOf "wgrep" [ { usePackage.wgrep.enable = true; } ];
     expected = "(use-package wgrep\n  :demand t\n  :custom ((wgrep-auto-save-buffer t))\n  )";
   };
+  testConsultFullOffByDefault = {
+    expr = (cfg [ ]).profiles.consult-full.enable;
+    expected = false;
+  };
+  # enabling the profile merges the full binding surface onto the base six
+  # (bind/bindLocal union; config = base consult-customize THEN the full one).
+  testConsultFullMergedAssembly = {
+    expr = assemblyOf "consult" [ { profiles.consult-full.enable = true; } ];
+    expected = "(use-package consult\n  :bind ((\"C-M-#\" . consult-register) (\"C-c M-x\" . consult-mode-command) (\"C-c h\" . consult-history) (\"C-c i\" . consult-info) (\"C-c k\" . consult-kmacro) (\"C-c m\" . consult-man) (\"C-x 4 b\" . consult-buffer-other-window) (\"C-x 5 b\" . consult-buffer-other-frame) (\"C-x M-:\" . consult-complex-command) (\"C-x b\" . consult-buffer) (\"C-x p b\" . consult-project-buffer) (\"C-x r b\" . consult-bookmark) (\"C-x t b\" . consult-buffer-other-tab) (\"M-#\" . consult-register-load) (\"M-'\" . consult-register-store) (\"M-g I\" . consult-imenu-multi) (\"M-g M-g\" . consult-goto-line) (\"M-g e\" . consult-compile-error) (\"M-g f\" . consult-flymake) (\"M-g g\" . consult-goto-line) (\"M-g i\" . consult-imenu) (\"M-g k\" . consult-global-mark) (\"M-g m\" . consult-mark) (\"M-g o\" . consult-outline) (\"M-g r\" . consult-grep-match) (\"M-s G\" . consult-git-grep) (\"M-s L\" . consult-line-multi) (\"M-s c\" . consult-locate) (\"M-s d\" . consult-find) (\"M-s e\" . consult-isearch-history) (\"M-s g\" . consult-grep) (\"M-s k\" . consult-keep-lines) (\"M-s l\" . consult-line) (\"M-s r\" . consult-ripgrep) (\"M-s u\" . consult-focus-lines) (\"M-y\" . consult-yank-pop))\n  :bind (:map isearch-mode-map (\"M-e\" . consult-isearch-history) (\"M-s L\" . consult-line-multi) (\"M-s e\" . consult-isearch-history) (\"M-s l\" . consult-line))\n  :bind (:map minibuffer-local-map (\"M-r\" . consult-history) (\"M-s\" . consult-history))\n  :custom ((consult-narrow-key \"<\"))\n  :init (advice-add #'register-preview :override #'consult-register-window)\n(setq register-preview-delay 0.5)\n(setq xref-show-xrefs-function #'consult-xref\n      xref-show-definitions-function #'consult-xref)\n  :config (consult-customize consult-ripgrep :preview-key '(:debounce 0.4 any))\n(consult-customize\n consult-theme :preview-key '(:debounce 0.2 any)\n consult-git-grep consult-grep consult-man consult-bookmark\n consult-recent-file consult-xref\n consult-source-bookmark consult-source-file-register\n consult-source-recent-file consult-source-project-recent-file\n :preview-key '(:debounce 0.4 any))\n  )";
+  };
   # built-in: catalog's mkCatalogDefault (1400) must beat the type's
   # declaration default (1500) on a SCALAR — the case that hard-conflicts
   # at equal priority.

@@ -1,5 +1,6 @@
 # ennoixEval's substance: assemble baseModules (namespace + generation +
-# build + the collected catalog) and evaluate user modules against them.
+# build + the collected catalog + the collected profiles) and evaluate user
+# modules against them.
 { lib, pkgs }:
 let
   catalogDir = ./catalog;
@@ -9,12 +10,29 @@ let
   catalogModules = map (name: catalogDir + "/${name}/module.nix") (
     builtins.attrNames (lib.filterAttrs (_: type: type == "directory") (builtins.readDir catalogDir))
   );
+
+  # Every DIRECTORY under modules/profiles is a profile; its module MUST be
+  # named profile.nix. Toggles are registered here from the dir names so each
+  # profile's `enable` materializes at its false default even when off — which
+  # lets profile.nix stay a pure `mkIf config.profiles.<name>.enable {…}` body.
+  profilesDir = ./profiles;
+  profileNames = builtins.attrNames (
+    lib.filterAttrs (_: type: type == "directory") (builtins.readDir profilesDir)
+  );
+  profileModules = map (name: profilesDir + "/${name}/profile.nix") profileNames;
+  profileToggles = {
+    profiles = lib.genAttrs profileNames (_: { });
+  };
+
   baseModules = [
     ./use-package.nix
     ./generation.nix
     ./build.nix
+    ./profiles.nix
+    profileToggles
   ]
-  ++ catalogModules;
+  ++ catalogModules
+  ++ profileModules;
 in
 modules:
 (lib.evalModules {
